@@ -1,0 +1,8 @@
+node_modules/
+main.js
+*.map
+.blocks-backups/
+.DS_Store
+*.log
+.env
+.env.*
