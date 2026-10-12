@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { EditorState } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { Decoration, EditorView, WidgetType } from '@codemirror/view';
 import { blocksExtension } from '../src/editor';
 
 const views: EditorView[] = [];
@@ -41,6 +42,152 @@ function pointer(target: Element, type: string, y: number, x = 120): void {
 }
 
 describe('editor integration', () => {
+  it('preserves accessible control names without attributes that trigger host or native tooltips', () => {
+    const first = editor();
+    const second = editor();
+    const names = new Set<string>();
+    for (const view of [first, second]) {
+      const controls = view.dom.querySelector('.blocks-controls')!;
+      expect(controls.querySelector('[aria-label], [title]')).toBeNull();
+      expect(controls.hasAttribute('aria-label')).toBe(false);
+      for (const element of [controls, ...controls.querySelectorAll('button')]) {
+        const id = element.getAttribute('aria-labelledby')!;
+        expect(id).toBeTruthy();
+        expect(names.has(id)).toBe(false);
+        names.add(id);
+        const label = document.getElementById(id)!;
+        expect(element.contains(label)).toBe(true);
+        expect(label.textContent).toBeTruthy();
+      }
+    }
+    const plus = first.dom.querySelector('.blocks-plus')!;
+    expect(document.getElementById(plus.getAttribute('aria-labelledby')!)!.textContent).toBe('Insert block below. Option-click to insert above.');
+  });
+
+  it.each([
+    { theme: 'theme-light', background: 'rgb(242, 242, 242)' },
+    { theme: 'theme-dark', background: 'rgb(68, 68, 68)' },
+  ])('keeps selected controls visible after pointer capture ends in $theme', async ({ theme, background }) => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync('styles.css', 'utf8');
+    document.body.append(style);
+    const view = editor();
+    view.dom.classList.add(theme);
+    await hover(view);
+    const handle = view.dom.querySelector<HTMLElement>('.blocks-handle')!;
+    const controls = view.dom.querySelector<HTMLElement>('.blocks-controls')!;
+    const y = view.documentTop + view.lineBlockAt(0).top + 1;
+    pointer(handle, 'pointerdown', y);
+    pointer(handle, 'pointerup', y);
+    handle.dispatchEvent(new Event('lostpointercapture'));
+    view.dom.dispatchEvent(new Event('pointerleave'));
+    expect(controls.classList.contains('is-visible')).toBe(true);
+    expect(window.getComputedStyle(controls).opacity).toBe('1');
+    expect(window.getComputedStyle(controls).pointerEvents).toBe('auto');
+    expect(window.getComputedStyle(handle).backgroundColor).toBe(background);
+    expect(window.getComputedStyle(handle).outline).toBe('none');
+    expect(handle.getAttribute('aria-pressed')).toBe('true');
+    expect(view.dom.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    expect(controls.classList.contains('is-visible')).toBe(true);
+    handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown' }));
+    expect(view.state.doc.toString()).toBe('Second\n\nFirst');
+  });
+
+  it('keeps controls at the dragged block top and anchors to it after dropping into blank space', async () => {
+    const view = editor('First\n\n\n\nSecond');
+    await hover(view);
+    const handle = view.dom.querySelector('.blocks-handle')!;
+    const controls = view.dom.querySelector<HTMLElement>('.blocks-controls')!;
+    const start = view.documentTop + view.lineBlockAt(0).top + 1;
+    pointer(handle, 'pointerdown', start);
+    pointer(handle, 'pointerup', start);
+    pointer(handle, 'pointerdown', start);
+    const dropY = view.documentTop + view.lineBlockAt(7).bottom - 1;
+    pointer(handle, 'pointermove', dropY);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(Number.parseFloat(controls.style.top)).toBe(dropY - 1);
+    expect(controls.classList.contains('is-visible')).toBe(true);
+    pointer(handle, 'pointerup', dropY);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const moved = view.state.doc.toString().indexOf('First');
+    expect(moved).toBeGreaterThan(0);
+    expect(view.state.selection.main.from).toBe(moved);
+    expect(view.state.selection.main.to).toBe(moved + 5);
+    expect(Number.parseFloat(controls.style.top)).toBe(view.documentTop + view.lineBlockAt(moved).top);
+    expect(handle.getAttribute('aria-pressed')).toBe('true');
+    view.dom.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 5 }));
+    expect(Number.parseFloat(controls.style.top)).toBe(view.documentTop + view.lineBlockAt(moved).top);
+    expect(controls.classList.contains('is-visible')).toBe(true);
+  });
+
+  it.each([
+    { doc: 'Paragraph\ncontinued', from: 0, to: 19 },
+    { doc: '', from: 0, to: 0 },
+    { doc: 'First\n\n\n\nSecond', from: 7, to: 7 },
+  ])('highlights a selected block, including an empty block: $doc', async ({ doc, from, to }) => {
+    const view = editor(doc);
+    await hover(view);
+    const handle = view.dom.querySelector('.blocks-handle')!;
+    const y = view.documentTop + view.lineBlockAt(from).top + 1;
+    view.dom.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: y }));
+    pointer(handle, 'pointerdown', y);
+    pointer(handle, 'pointerup', y);
+    const highlight = view.dom.querySelector<HTMLElement>('.blocks-selection-highlight')!;
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    expect(Number.parseFloat(highlight.style.height)).toBeGreaterThan(0);
+    expect(Number.parseFloat(highlight.style.width)).toBeGreaterThan(0);
+    expect(handle.classList.contains('is-selected')).toBe(true);
+    expect(handle.getAttribute('aria-pressed')).toBe('true');
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.state.selection.main.from).toBe(from);
+    expect(view.state.selection.main.to).toBe(to);
+    view.contentDOM.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(handle.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('highlights a rendered image widget selected with the keyboard', async () => {
+    const doc = '![[Photo.png]]';
+    const image = new class extends WidgetType {
+      toDOM(): HTMLElement { const el = document.createElement('div'); el.append(document.createElement('img')); return el; }
+    }();
+    const view = new EditorView({ parent: document.body, state: EditorState.create({ doc, extensions: [
+      blocksExtension, EditorView.decorations.of(Decoration.set(Decoration.replace({ widget: image, block: true }).range(0, doc.length))),
+    ] }) });
+    views.push(view);
+    await hover(view);
+    const handle = view.dom.querySelector('.blocks-handle')!;
+    handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    const highlight = view.dom.querySelector<HTMLElement>('.blocks-selection-highlight')!;
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    expect(Number.parseFloat(highlight.style.height)).toBeGreaterThan(0);
+    expect(handle.getAttribute('aria-pressed')).toBe('true');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it('keeps the selected highlight through measurement and clears it after edits or a new selection', async () => {
+    const view = editor();
+    await hover(view);
+    const handle = view.dom.querySelector('.blocks-handle')!;
+    handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
+    await hover(view);
+    const highlight = view.dom.querySelector('.blocks-selection-highlight')!;
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    view.dispatch({ changes: { from: 0, to: 5, insert: 'Changed' } });
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(handle.getAttribute('aria-pressed')).toBe('false');
+    view.destroy();
+    views.splice(views.indexOf(view), 1);
+    expect(document.querySelector('.blocks-selection-highlight')).toBeNull();
+  });
+
   it('keeps the controls beside centered text as its position changes', async () => {
     const view = editor();
     let left = 310;

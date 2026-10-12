@@ -1,4 +1,15 @@
 .blocks-editor .cm-scroller { padding-left: 54px; }
+.blocks-accessible-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .blocks-controls {
   position: absolute;
   display: flex;
@@ -25,7 +36,20 @@
   touch-action: none;
 }
 .blocks-controls button:hover { background: var(--background-modifier-hover); color: var(--text-muted); }
-.blocks-controls button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.blocks-controls button:focus,
+.blocks-controls button:focus-visible { outline: none; box-shadow: none; }
+.blocks-controls button:focus-visible { background: var(--background-modifier-hover); color: var(--text-normal); }
+.blocks-controls .blocks-handle.is-selected { background: #F2F2F2; color: var(--text-muted); }
+.theme-dark .blocks-controls .blocks-handle.is-selected { background: #444444; }
+.blocks-selection-highlight {
+  position: absolute;
+  z-index: 18;
+  pointer-events: none;
+  display: none;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+.blocks-selection-highlight.is-visible { display: block; }
 .blocks-controls svg { width: 20px; height: 20px; }
 .blocks-plus svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .blocks-handle svg { fill: currentColor; }

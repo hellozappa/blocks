@@ -10,10 +10,21 @@ interface Drag {
   height: number; offset: number; left: number; width: number; ghost?: HTMLElement;
 }
 
+let labelId = 0;
+function labelWithoutTooltip(element: HTMLElement, text: string): void {
+  const label = element.ownerDocument.createElement('span');
+  label.id = `blocks-label-${++labelId}`;
+  label.className = 'blocks-accessible-label';
+  label.textContent = text;
+  element.append(label);
+  element.setAttribute('aria-labelledby', label.id);
+}
+
 class BlockControls {
   private blocks: Block[];
   private geometry: Geometry[] = [];
   private hovered?: Block;
+  private selected?: Block;
   private drag?: Drag;
   private frame = 0;
   private lastPointer?: { x: number; y: number };
@@ -23,6 +34,7 @@ class BlockControls {
   private readonly plus: HTMLButtonElement;
   private readonly handle: HTMLButtonElement;
   private readonly marker: HTMLElement;
+  private readonly highlight: HTMLElement;
   private readonly win: Window;
   private readonly cleanup: (() => void)[] = [];
   private destroyed = false;
@@ -33,17 +45,22 @@ class BlockControls {
     this.controls = view.dom.ownerDocument.createElement('div');
     this.controls.className = 'blocks-controls';
     this.controls.setAttribute('role', 'group');
-    this.controls.setAttribute('aria-label', 'Block controls');
+    labelWithoutTooltip(this.controls, 'Block controls');
     this.plus = this.button('blocks-plus', 'Insert block below. Option-click to insert above.', '<path d="M12 5v14M5 12h14"/>');
     this.handle = this.button('blocks-handle', 'Select or drag block. Arrow keys move the block when this button has focus.',
       '<circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>');
+    this.handle.setAttribute('aria-pressed', 'false');
     this.controls.append(this.plus, this.handle);
     this.marker = view.dom.ownerDocument.createElement('div');
     this.marker.className = 'blocks-drop-marker';
     this.marker.setAttribute('aria-hidden', 'true');
-    view.dom.append(this.controls, this.marker);
+    this.highlight = view.dom.ownerDocument.createElement('div');
+    this.highlight.className = 'blocks-selection-highlight';
+    this.highlight.setAttribute('aria-hidden', 'true');
+    view.dom.append(this.highlight, this.controls, this.marker);
+    this.listen(view.contentDOM, 'pointerdown', () => this.clearSelection());
     this.listen(view.dom, 'pointermove', event => this.hover(event as PointerEvent));
-    this.listen(view.dom, 'pointerleave', () => { if (!this.drag) this.hide(); });
+    this.listen(view.dom, 'pointerleave', () => { if (!this.drag && !this.selected) this.hide(); });
     this.listen(view.scrollDOM, 'scroll', () => this.measure());
     this.listen(this.plus, 'pointerdown', event => event.preventDefault());
     this.listen(this.plus, 'click', event => {
@@ -56,7 +73,9 @@ class BlockControls {
     this.listen(this.handle, 'pointercancel', () => this.cancel());
     this.listen(this.handle, 'lostpointercapture', () => this.cancel());
     this.listen(this.handle, 'keydown', event => this.keyboard(event as KeyboardEvent));
-    this.listen(this.win, 'keydown', event => { if ((event as KeyboardEvent).key === 'Escape') this.cancel(); });
+    this.listen(this.win, 'keydown', event => {
+      if ((event as KeyboardEvent).key === 'Escape') { this.cancel(); this.clearSelection(); }
+    });
     this.listen(this.win, 'blur', () => this.cancel());
     this.measure();
   }
@@ -65,9 +84,9 @@ class BlockControls {
     const button = this.view.dom.ownerDocument.createElement('button');
     button.className = className;
     button.type = 'button';
-    button.setAttribute('aria-label', label);
     // All SVG markup here is a fixed plugin constant.
     button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+    labelWithoutTooltip(button, label);
     return button;
   }
 
@@ -78,10 +97,15 @@ class BlockControls {
 
   update(update: ViewUpdate): void {
     if (update.docChanged) {
+      this.clearSelection();
       this.cancel();
       this.blocks = parseBlocks(update.state.doc.toString());
       this.hovered = undefined;
       this.hide();
+    }
+    if (update.selectionSet && this.selected) {
+      const range = update.state.selection.main;
+      if (range.from !== this.selected.from || range.to !== this.selected.to) this.clearSelection();
     }
     if (update.docChanged || update.geometryChanged || update.viewportChanged) this.measure();
   }
@@ -95,7 +119,8 @@ class BlockControls {
         const viewport = view.scrollDOM.getBoundingClientRect();
         const geometry: Geometry[] = [];
         this.blocks.forEach((block, index) => {
-          if (!view.visibleRanges.some(r => block.to >= r.from && block.from <= r.to)) return;
+          const emptyInViewport = block.from === block.to && block.from >= view.viewport.from && block.from <= view.viewport.to;
+          if (!emptyInViewport && !view.visibleRanges.some(r => block.to >= r.from && block.from <= r.to)) return;
           const first = view.lineBlockAt(block.from);
           const last = view.lineBlockAt(block.to);
           const top = view.documentTop + first.top;
@@ -133,18 +158,24 @@ class BlockControls {
         this.geometry = result.geometry;
         this.lines = result.lines;
         this.layout = { editor: result.editor, content: result.content, viewport: result.viewport };
+        this.updateSelection();
         if (this.drag) {
           const source = this.geometry.find(g => g.index === this.drag!.source);
           if (source) this.drag.height = this.dragHeight(source);
         }
         if (this.drag?.active) { this.preview(); this.scheduleFrame(); }
+        else if (this.selected) {
+          const selected = this.geometry.find(g => g.block === this.selected);
+          if (selected) this.showBlock(selected);
+          else this.hide();
+        }
         else if (this.lastPointer) this.showAt(this.lastPointer.x, this.lastPointer.y);
       },
     });
   }
 
   private hover(event: PointerEvent): void {
-    if (this.drag || this.controls.contains(event.target as Node)) return;
+    if (this.drag || this.selected || this.controls.contains(event.target as Node)) return;
     this.lastPointer = { x: event.clientX, y: event.clientY };
     this.showAt(event.clientX, event.clientY);
   }
@@ -156,11 +187,17 @@ class BlockControls {
     if (y < viewport.top || y > viewport.bottom || x > content.right) { this.hide(); return; }
     const found = this.geometry.find(g => y >= g.top && y < g.bottom);
     if (!found || x < found.left - 58) { this.hide(); return; }
+    this.showBlock(found);
+  }
+
+  private showBlock(found: Geometry): void {
+    const layout = this.layout;
+    if (!layout) return;
     this.hovered = found.block;
-    const editor = this.view.dom.getBoundingClientRect();
-    const top = Math.max(found.top, viewport.top) - editor.top;
+    this.updateSelection();
+    const top = Math.max(found.top, layout.viewport.top) - layout.editor.top;
     this.controls.style.top = `${top}px`;
-    this.controls.style.left = `${Math.max(0, found.left - editor.left - 54)}px`;
+    this.controls.style.left = `${Math.max(0, found.left - layout.editor.left - 54)}px`;
     this.controls.classList.add('is-visible');
   }
 
@@ -168,6 +205,32 @@ class BlockControls {
 
   private select(block: Block): void {
     this.view.dispatch({ selection: EditorSelection.single(block.from, block.to) });
+    this.selected = block;
+    this.updateSelection();
+    const selected = this.geometry.find(g => g.block === block);
+    if (selected) this.showBlock(selected);
+  }
+
+  private clearSelection(): void {
+    this.selected = undefined;
+    this.updateSelection();
+  }
+
+  private updateSelection(): void {
+    const pressed = !!this.selected && this.hovered === this.selected;
+    this.handle.classList.toggle('is-selected', pressed);
+    this.handle.setAttribute('aria-pressed', String(pressed));
+    const bounds = this.geometry.find(g => g.block === this.selected);
+    const layout = this.layout;
+    const visible = !!bounds && !!layout && !this.drag?.active;
+    this.highlight.classList.toggle('is-visible', visible);
+    if (!visible || !bounds || !layout) return;
+    const top = Math.max(bounds.top, layout.viewport.top);
+    const bottom = Math.min(bounds.bottom, layout.viewport.bottom);
+    this.highlight.style.top = `${top - layout.editor.top}px`;
+    this.highlight.style.left = `${bounds.left - layout.editor.left}px`;
+    this.highlight.style.width = `${Math.max(1, bounds.right - bounds.left)}px`;
+    this.highlight.style.height = `${Math.max(0, bottom - top)}px`;
   }
 
   private dragHeight(source: Geometry): number {
@@ -204,6 +267,7 @@ class BlockControls {
   private activate(): void {
     const drag = this.drag!;
     drag.active = true;
+    this.updateSelection();
     this.view.dom.classList.add('blocks-dragging');
     const ghost = this.view.dom.ownerDocument.createElement('div');
     ghost.className = 'blocks-drag-ghost';
@@ -223,7 +287,17 @@ class BlockControls {
     this.view.dom.ownerDocument.body.append(ghost);
     drag.ghost = ghost;
     ghost.style.transform = `translate3d(${drag.left + drag.x - drag.startX}px, ${drag.y - drag.offset}px, 0)`;
+    this.positionDragControls();
     this.preview();
+  }
+
+  private positionDragControls(): void {
+    const drag = this.drag;
+    const layout = this.layout;
+    if (!drag?.active || !layout) return;
+    this.controls.style.top = `${drag.y - drag.offset - layout.editor.top}px`;
+    this.controls.style.left = `${Math.max(0, drag.left + drag.x - drag.startX - layout.editor.left - 54)}px`;
+    this.controls.classList.add('is-visible');
   }
 
   private tick(): void {
@@ -243,6 +317,7 @@ class BlockControls {
       if (next !== current) nextScroll = next;
     }
     drag.ghost!.style.transform = `translate3d(${drag.left + drag.x - drag.startX}px, ${drag.y - drag.offset}px, 0)`;
+    this.positionDragControls();
     if (drag.slot !== slot) { drag.slot = slot; this.preview(); }
     if (nextScroll !== undefined) {
       this.view.scrollDOM.scrollTop = nextScroll;
@@ -303,10 +378,12 @@ class BlockControls {
     const edit = drag.active && drag.snapshot === this.view.state.doc.toString()
       ? moveBlock(drag.snapshot, this.blocks, drag.source, drag.slot) : null;
     this.cancel();
-    if (edit) this.apply(edit, 'move.blocks');
+    if (edit) this.apply(edit, 'move.blocks', this.blocks[drag.source]);
     else {
       if (!drag.active) this.select(this.blocks[drag.source]);
-      this.showAt(event.clientX, event.clientY);
+      const selected = this.geometry.find(g => g.block === this.selected);
+      if (selected) this.showBlock(selected);
+      else this.showAt(event.clientX, event.clientY);
     }
   }
 
@@ -332,7 +409,10 @@ class BlockControls {
     this.clearPreview();
     this.view.dom.classList.remove('blocks-dragging');
     this.marker.classList.remove('is-visible');
-    this.hide();
+    this.updateSelection();
+    const selected = this.geometry.find(g => g.block === this.selected);
+    if (selected && !this.destroyed) this.showBlock(selected);
+    else this.hide();
   }
 
   private keyboard(event: KeyboardEvent): void {
@@ -347,18 +427,24 @@ class BlockControls {
     const source = this.blocks.indexOf(this.hovered);
     const edit = moveBlock(this.view.state.doc.toString(), this.blocks, source, event.key === 'ArrowUp' ? source - 1 : source + 2);
     if (edit) {
-      this.apply(edit, 'move.blocks');
+      this.apply(edit, 'move.blocks', this.blocks[source]);
       this.hovered = blockAt(this.blocks, edit.cursor);
       this.handle.focus({ preventScroll: true });
     }
   }
 
-  private apply(edit: Edit, event: string): void {
+  private apply(edit: Edit, event: string, moving?: Block): void {
     this.view.dispatch({
       changes: { from: edit.from, to: edit.to, insert: edit.insert },
-      selection: EditorSelection.cursor(edit.cursor), scrollIntoView: true,
+      selection: EditorSelection.single(edit.cursor, edit.cursor + (moving ? moving.to - moving.from : 0)), scrollIntoView: true,
       annotations: Transaction.userEvent.of(event),
     });
+    if (moving) {
+      this.selected = blockAt(this.blocks, edit.cursor);
+      this.hovered = this.selected;
+      this.lastPointer = undefined;
+      this.updateSelection();
+    }
     this.view.focus();
   }
 
@@ -368,6 +454,7 @@ class BlockControls {
     this.cleanup.forEach(fn => fn());
     this.controls.remove();
     this.marker.remove();
+    this.highlight.remove();
     this.view.dom.classList.remove('blocks-editor');
   }
 }
