@@ -1,6 +1,7 @@
 import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { Block, Edit, blockAt, insertBlock, moveBlock, parseBlocks } from './blocks';
+import { createControls } from './controls';
 
 interface Geometry { block: Block; index: number; top: number; bottom: number; left: number; right: number }
 interface PreviewLine { element: HTMLElement; index: number; originalTranslate: string; shift?: number }
@@ -10,21 +11,12 @@ interface Drag {
   height: number; offset: number; left: number; width: number; ghost?: HTMLElement;
 }
 
-let labelId = 0;
-function labelWithoutTooltip(element: HTMLElement, text: string): void {
-  const label = element.ownerDocument.createElement('span');
-  label.id = `blocks-label-${++labelId}`;
-  label.className = 'blocks-accessible-label';
-  label.textContent = text;
-  element.append(label);
-  element.setAttribute('aria-labelledby', label.id);
-}
-
 class BlockControls {
   private blocks: Block[];
   private geometry: Geometry[] = [];
   private hovered?: Block;
   private selected?: Block;
+  private selectionOrigin?: number;
   private drag?: Drag;
   private frame = 0;
   private lastPointer?: { x: number; y: number };
@@ -42,15 +34,10 @@ class BlockControls {
   constructor(private readonly view: EditorView) {
     this.win = view.dom.ownerDocument.defaultView!;
     this.blocks = parseBlocks(view.state.doc.toString());
-    this.controls = view.dom.ownerDocument.createElement('div');
-    this.controls.className = 'blocks-controls';
-    this.controls.setAttribute('role', 'group');
-    labelWithoutTooltip(this.controls, 'Block controls');
-    this.plus = this.button('blocks-plus', 'Insert block below. Option-click to insert above.', '<path d="M12 5v14M5 12h14"/>');
-    this.handle = this.button('blocks-handle', 'Select or drag block. Arrow keys move the block when this button has focus.',
-      '<circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>');
-    this.handle.setAttribute('aria-pressed', 'false');
-    this.controls.append(this.plus, this.handle);
+    const buttons = createControls(view.dom.ownerDocument);
+    this.controls = buttons.controls;
+    this.plus = buttons.plus;
+    this.handle = buttons.handle;
     this.marker = view.dom.ownerDocument.createElement('div');
     this.marker.className = 'blocks-drop-marker';
     this.marker.setAttribute('aria-hidden', 'true');
@@ -73,26 +60,14 @@ class BlockControls {
     this.listen(this.handle, 'pointercancel', () => this.cancel());
     this.listen(this.handle, 'lostpointercapture', () => this.cancel());
     this.listen(this.handle, 'keydown', event => this.keyboard(event as KeyboardEvent));
-    this.listen(this.win, 'keydown', event => {
-      if ((event as KeyboardEvent).key === 'Escape') { this.cancel(); this.clearSelection(); }
-    });
+    this.listen(this.win, 'keydown', event => this.escape(event as KeyboardEvent), true);
     this.listen(this.win, 'blur', () => this.cancel());
     this.measure();
   }
 
-  private button(className: string, label: string, paths: string): HTMLButtonElement {
-    const button = this.view.dom.ownerDocument.createElement('button');
-    button.className = className;
-    button.type = 'button';
-    // All SVG markup here is a fixed plugin constant.
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
-    labelWithoutTooltip(button, label);
-    return button;
-  }
-
-  private listen(target: EventTarget, type: string, handler: EventListener): void {
-    target.addEventListener(type, handler);
-    this.cleanup.push(() => target.removeEventListener(type, handler));
+  private listen(target: EventTarget, type: string, handler: EventListener, capture = false): void {
+    target.addEventListener(type, handler, capture);
+    this.cleanup.push(() => target.removeEventListener(type, handler, capture));
   }
 
   update(update: ViewUpdate): void {
@@ -204,8 +179,11 @@ class BlockControls {
   private hide(): void { this.controls.classList.remove('is-visible'); }
 
   private select(block: Block): void {
+    const origin = this.view.state.selection.main.head;
     this.view.dispatch({ selection: EditorSelection.single(block.from, block.to) });
     this.selected = block;
+    this.hovered = block;
+    this.selectionOrigin = origin >= block.from && origin <= block.to ? origin : block.from;
     this.updateSelection();
     const selected = this.geometry.find(g => g.block === block);
     if (selected) this.showBlock(selected);
@@ -213,7 +191,29 @@ class BlockControls {
 
   private clearSelection(): void {
     this.selected = undefined;
+    this.selectionOrigin = undefined;
     this.updateSelection();
+  }
+
+  private escape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
+      || !this.view.dom.contains(this.view.dom.ownerDocument.activeElement)) return;
+    if (this.drag || this.selected) {
+      event.preventDefault(); event.stopPropagation();
+      this.cancel();
+      if (this.selected) {
+        const cursor = this.selectionOrigin ?? this.selected.from;
+        this.clearSelection();
+        this.view.dispatch({ selection: EditorSelection.cursor(cursor) });
+        this.view.focus();
+      }
+      return;
+    }
+    if (this.view.state.readOnly || this.view.state.selection.ranges.length !== 1 || !this.view.state.selection.main.empty) return;
+    const block = blockAt(this.blocks, this.view.state.selection.main.head);
+    if (!block) return;
+    event.preventDefault(); event.stopPropagation();
+    this.select(block);
   }
 
   private updateSelection(): void {
@@ -441,6 +441,7 @@ class BlockControls {
     });
     if (moving) {
       this.selected = blockAt(this.blocks, edit.cursor);
+      this.selectionOrigin = edit.cursor;
       this.hovered = this.selected;
       this.lastPointer = undefined;
       this.updateSelection();

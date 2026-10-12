@@ -42,6 +42,37 @@ function pointer(target: Element, type: string, y: number, x = 120): void {
 }
 
 describe('editor integration', () => {
+  it.each([
+    { doc: 'First\n\nSecond\ncontinued', cursor: 12, from: 7, to: 23 },
+    { doc: '', cursor: 0, from: 0, to: 0 },
+  ])('Escape selects the caret block and then restores the caret: $doc', async ({ doc, cursor, from, to }) => {
+    const view = editor(doc);
+    await hover(view);
+    view.dispatch({ selection: { anchor: cursor } }); view.focus();
+    const escape = () => view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(escape()).toBe(false);
+    expect(view.state.selection.main.from).toBe(from); expect(view.state.selection.main.to).toBe(to);
+    expect(view.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('true');
+    expect(view.dom.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+    expect(escape()).toBe(false);
+    expect(view.state.selection.main.empty).toBe(true); expect(view.state.selection.main.head).toBe(cursor);
+    expect(view.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('false');
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+  it('Escape only affects the focused editor and leaves arbitrary text selections unchanged', async () => {
+    const first = editor(); const second = editor('Other');
+    await hover(first); await hover(second);
+    first.focus();
+    first.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(first.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('true');
+    expect(second.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('false');
+    const input = document.createElement('input'); document.body.append(input); input.focus();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(first.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('true');
+    second.dispatch({ selection: { anchor: 1, head: 3 } }); second.focus();
+    second.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(second.state.selection.main.from).toBe(1); expect(second.state.selection.main.to).toBe(3);
+  });
   it('preserves accessible control names without attributes that trigger host or native tooltips', () => {
     const first = editor();
     const second = editor();
@@ -163,6 +194,7 @@ describe('editor integration', () => {
     expect(highlight.classList.contains('is-visible')).toBe(true);
     expect(Number.parseFloat(highlight.style.height)).toBeGreaterThan(0);
     expect(handle.getAttribute('aria-pressed')).toBe('true');
+    (handle as HTMLElement).focus();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(highlight.classList.contains('is-visible')).toBe(false);
     expect(view.state.doc.toString()).toBe(doc);

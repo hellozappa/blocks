@@ -19,8 +19,7 @@
   pointer-events: none;
   transition: opacity 160ms ease;
 }
-.blocks-controls.is-visible,
-.blocks-controls:has(:focus-visible) { opacity: 1; pointer-events: auto; }
+.blocks-controls.is-visible { opacity: 1; pointer-events: auto; }
 .blocks-controls button {
   display: grid;
   place-items: center;
@@ -87,3 +86,5 @@
 @media (prefers-reduced-motion: reduce) {
   .blocks-controls, .blocks-preview-line, .blocks-drop-marker { transition: none; }
 }
+.blocks-reading { position: relative; }
+.blocks-reading-empty { min-height: 24px; }

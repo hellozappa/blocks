@@ -1,15 +1,19 @@
 # Blocks
 
-Blocks adds a plus button and a six-dot drag handle to the left of the hovered Markdown block in Obsidian's Live Preview and Source mode.
+Blocks adds a plus button and a six-dot drag handle to the left of the hovered Markdown block in Obsidian's Reading view, Live Preview, and Source mode.
 
 - Click the plus button to insert an empty block below the hovered block. Option-click inserts above.
 - Click the handle to select the block. Drag it to another position in the same note, then release to move it.
-- The floating block follows the pointer. Nearby blocks animate into their preview positions. The note changes on drop, with one undo step per move.
+- The floating block follows the pointer. In the editor, nearby blocks animate into their preview positions. Reading view shows a drop marker. The note changes on drop, with one undo step per move.
 - Press Escape to cancel a drag. With the handle focused, press Arrow Up or Arrow Down to move the block, or Enter or Space to select it.
 
 Paragraphs include their soft line breaks. Headings, top-level list items, images, and embeds are separate blocks. A list item carries its nested content. Fenced code, tables, quotes, callouts, display math, and multiline comments move as whole blocks. Separate Obsidian block identifiers stay with their content. Frontmatter has no block controls.
 
-The plugin preserves Markdown content and uses blank lines for empty blocks. Moving content can add blank lines where Markdown needs them to keep neighboring blocks separate. List items retain their markers and numbering. The plugin does not renumber ordered lists. Reading view is not supported in this version. Reduced-motion preferences disable the control and neighboring-block transitions.
+The plugin preserves Markdown content and uses blank lines for empty blocks. Moving content can add blank lines where Markdown needs them to keep neighboring blocks separate. List items retain their markers and numbering. The plugin does not renumber ordered lists. Reduced-motion preferences disable the control and neighboring-block transitions.
+
+Reading view controls operate on the note's own rendered sections, including images and top-level list items with their nested content. Moves keep the note in Reading view. The plus button inserts a blank block and switches that note to Live Preview with the caret ready for typing. Blank blocks have visible space in Reading view. Embedded notes do not receive controls that could edit the host note. A move is cancelled if the note changes during the drag.
+
+Selecting a block highlights it and keeps its controls visible. The selected drag handle has a `#F2F2F2` background in light mode and `#444444` in dark mode. Click the note content or press Escape to clear the block selection. In Live Preview and Source mode, Escape selects the block containing the caret when no block is selected. A second Escape restores the caret. During a drag, Escape cancels it. The controls have accessible names without hover tooltips or blue focus outlines.
 
 ## Build
 
