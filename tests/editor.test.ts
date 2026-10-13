@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { EditorState } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType } from '@codemirror/view';
-import { blocksExtension } from '../src/editor';
+import { Decoration, drawSelection, EditorView, WidgetType } from '@codemirror/view';
+import { blocksExtension, createBlocksExtension } from '../src/editor';
 
 const views: EditorView[] = [];
 const captures = new WeakMap<HTMLElement, number>();
@@ -53,9 +53,13 @@ describe('editor integration', () => {
     expect(escape()).toBe(false);
     expect(view.state.selection.main.from).toBe(from); expect(view.state.selection.main.to).toBe(to);
     expect(view.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('true');
+    expect(document.activeElement).toBe(view.dom.querySelector('.blocks-handle'));
+    expect(view.dom.hasAttribute('data-blocks-block-selected')).toBe(true);
     expect(view.dom.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
     expect(escape()).toBe(false);
     expect(view.state.selection.main.empty).toBe(true); expect(view.state.selection.main.head).toBe(cursor);
+    expect(document.activeElement).toBe(view.contentDOM);
+    expect(view.dom.hasAttribute('data-blocks-block-selected')).toBe(false);
     expect(view.dom.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('false');
     expect(view.state.doc.toString()).toBe(doc);
   });
@@ -73,6 +77,82 @@ describe('editor integration', () => {
     second.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(second.state.selection.main.from).toBe(1); expect(second.state.selection.main.to).toBe(3);
   });
+  it('consumes Escape before another window handler can collapse the block selection', async () => {
+    const view = editor();
+    await hover(view);
+    view.focus();
+    const collapse = vi.fn(() => view.dispatch({ selection: { anchor: 5 } }));
+    window.addEventListener('keydown', collapse, true);
+    try {
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(collapse).not.toHaveBeenCalled();
+      expect(view.state.selection.main.from).toBe(0);
+      expect(view.state.selection.main.to).toBe(5);
+      expect(document.activeElement).toBe(view.dom.querySelector('.blocks-handle'));
+    } finally { window.removeEventListener('keydown', collapse, true); }
+  });
+
+  it('paints sentence selections as a block background and hides both selection layers for a selected block', async () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync('styles.css', 'utf8'); document.body.append(style);
+    let color = '#123456';
+    const view = new EditorView({ parent: document.body, state: EditorState.create({
+      doc: 'First sentence. Second sentence.', extensions: [createBlocksExtension(() => color), drawSelection()],
+    }) });
+    views.push(view);
+    await hover(view);
+    view.dispatch({ selection: { anchor: 2, head: 10 } }); view.focus();
+    await hover(view);
+    const highlight = view.dom.querySelector<HTMLElement>('.blocks-selection-highlight')!;
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    expect(view.dom.hasAttribute('data-blocks-text-selected')).toBe(true);
+    expect(highlight.style.getPropertyValue('--blocks-highlight-color')).toBe('#123456');
+    expect(view.state.selection.main.from).toBe(2); expect(view.state.selection.main.to).toBe(10);
+    const selection = view.dom.querySelector<HTMLElement>('.cm-selectionBackground')!;
+    expect(window.getComputedStyle(selection).display).toBe('none');
+    color = 'var(--interactive-accent)';
+    view.dispatch({ selection: { anchor: 4 } });
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(view.dom.hasAttribute('data-blocks-text-selected')).toBe(false);
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(window.getComputedStyle(view.dom.querySelector('.cm-cursorLayer')!).visibility).toBe('hidden');
+    expect(window.getComputedStyle(view.contentDOM).caretColor).toBe('rgba(0, 0, 0, 0)');
+    expect(highlight.style.getPropertyValue('--blocks-highlight-color')).toBe('var(--interactive-accent)');
+  });
+
+  it.each(['block', 'text'])('suppresses Obsidian inline selection paint for a %s selection without hiding its text', async kind => {
+    const style = document.createElement('style');
+    // Obsidian paints inline selection spans in addition to CodeMirror's selection layer.
+    style.textContent = `
+      .markdown-source-view.mod-cm6 .cm-line .cm-selection,
+      .markdown-source-view.mod-cm6 .cm-line .cm-inline-code .cm-selection { background-color: rgb(210, 190, 240); }
+    ` + readFileSync('styles.css', 'utf8');
+    document.body.append(style);
+    const parent = document.createElement('div'); parent.className = 'markdown-source-view mod-cm6'; document.body.append(parent);
+    const view = new EditorView({ parent, state: EditorState.create({ doc: 'First sentence.', extensions: [
+      blocksExtension,
+      EditorView.decorations.of(Decoration.set([
+        Decoration.mark({ class: 'cm-selection' }).range(0, 5),
+        Decoration.mark({ class: 'cm-inline-code' }).range(6, 14),
+        Decoration.mark({ class: 'cm-selection' }).range(7, 13),
+      ], true)),
+    ] }) });
+    views.push(view); await hover(view); view.focus();
+    if (kind === 'block') view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    else view.dispatch({ selection: { anchor: 1, head: 13 } });
+    await hover(view);
+    const spans = view.contentDOM.querySelectorAll<HTMLElement>('.cm-selection');
+    expect(spans.length).toBeGreaterThan(0);
+    for (const span of spans) {
+      expect(window.getComputedStyle(span).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+      expect(window.getComputedStyle(span).display).not.toBe('none');
+      expect(span.textContent).toBeTruthy();
+    }
+    expect(view.dom.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+    expect(view.state.doc.toString()).toBe('First sentence.');
+    expect(view.state.selection.main.empty).toBe(false);
+  });
+
   it('preserves accessible control names without attributes that trigger host or native tooltips', () => {
     const first = editor();
     const second = editor();
@@ -213,8 +293,10 @@ describe('editor integration', () => {
     handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
     expect(highlight.classList.contains('is-visible')).toBe(true);
     view.dispatch({ changes: { from: 0, to: 5, insert: 'Changed' } });
-    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(view.dom.hasAttribute('data-blocks-block-selected')).toBe(false);
     expect(handle.getAttribute('aria-pressed')).toBe('false');
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(highlight.classList.contains('is-visible')).toBe(false);
     view.destroy();
     views.splice(views.indexOf(view), 1);
     expect(document.querySelector('.blocks-selection-highlight')).toBeNull();

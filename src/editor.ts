@@ -31,7 +31,7 @@ class BlockControls {
   private readonly cleanup: (() => void)[] = [];
   private destroyed = false;
 
-  constructor(private readonly view: EditorView) {
+  constructor(private readonly view: EditorView, private readonly highlightColor: () => string = () => 'var(--interactive-accent)') {
     this.win = view.dom.ownerDocument.defaultView!;
     this.blocks = parseBlocks(view.state.doc.toString());
     const buttons = createControls(view.dom.ownerDocument);
@@ -82,6 +82,7 @@ class BlockControls {
       const range = update.state.selection.main;
       if (range.from !== this.selected.from || range.to !== this.selected.to) this.clearSelection();
     }
+    if (update.selectionSet) this.updateSelection();
     if (update.docChanged || update.geometryChanged || update.viewportChanged) this.measure();
   }
 
@@ -187,19 +188,20 @@ class BlockControls {
     this.updateSelection();
     const selected = this.geometry.find(g => g.block === block);
     if (selected) this.showBlock(selected);
+    this.handle.focus({ preventScroll: true });
   }
 
   private clearSelection(): void {
     this.selected = undefined;
     this.selectionOrigin = undefined;
-    this.updateSelection();
+    this.updateSelection(false);
   }
 
   private escape(event: KeyboardEvent): void {
     if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
       || !this.view.dom.contains(this.view.dom.ownerDocument.activeElement)) return;
     if (this.drag || this.selected) {
-      event.preventDefault(); event.stopPropagation();
+      event.preventDefault(); event.stopImmediatePropagation();
       this.cancel();
       if (this.selected) {
         const cursor = this.selectionOrigin ?? this.selected.from;
@@ -212,15 +214,25 @@ class BlockControls {
     if (this.view.state.readOnly || this.view.state.selection.ranges.length !== 1 || !this.view.state.selection.main.empty) return;
     const block = blockAt(this.blocks, this.view.state.selection.main.head);
     if (!block) return;
-    event.preventDefault(); event.stopPropagation();
+    event.preventDefault(); event.stopImmediatePropagation();
     this.select(block);
   }
 
-  private updateSelection(): void {
+  private updateSelection(includeText = true): void {
+    const ranges = includeText ? this.view.state.selection.ranges.filter(range => !range.empty) : [];
+    this.view.dom.toggleAttribute('data-blocks-block-selected', !!this.selected);
+    this.highlight.style.setProperty('--blocks-highlight-color', this.highlightColor());
     const pressed = !!this.selected && this.hovered === this.selected;
     this.handle.classList.toggle('is-selected', pressed);
     this.handle.setAttribute('aria-pressed', String(pressed));
-    const bounds = this.geometry.find(g => g.block === this.selected);
+    const matching = this.selected
+      ? this.geometry.filter(g => g.block === this.selected)
+      : this.geometry.filter(g => ranges.some(range => range.from < g.block.to && range.to > g.block.from));
+    this.view.dom.toggleAttribute('data-blocks-text-selected', !this.selected && matching.length > 0);
+    const bounds = matching.length ? {
+      top: Math.min(...matching.map(g => g.top)), bottom: Math.max(...matching.map(g => g.bottom)),
+      left: Math.min(...matching.map(g => g.left)), right: Math.max(...matching.map(g => g.right)),
+    } : undefined;
     const layout = this.layout;
     const visible = !!bounds && !!layout && !this.drag?.active;
     this.highlight.classList.toggle('is-visible', visible);
@@ -446,7 +458,8 @@ class BlockControls {
       this.lastPointer = undefined;
       this.updateSelection();
     }
-    this.view.focus();
+    if (moving) this.handle.focus({ preventScroll: true });
+    else this.view.focus();
   }
 
   destroy(): void {
@@ -457,10 +470,15 @@ class BlockControls {
     this.marker.remove();
     this.highlight.remove();
     this.view.dom.classList.remove('blocks-editor');
+    this.view.dom.removeAttribute('data-blocks-block-selected');
+    this.view.dom.removeAttribute('data-blocks-text-selected');
   }
 }
 
-export const blocksExtension = [
-  EditorView.editorAttributes.of({ class: 'blocks-editor' }),
-  ViewPlugin.fromClass(BlockControls),
-];
+export function createBlocksExtension(highlightColor: () => string) {
+  return [
+    EditorView.editorAttributes.of({ class: 'blocks-editor' }),
+    ViewPlugin.define(view => new BlockControls(view, highlightColor)),
+  ];
+}
+export const blocksExtension = createBlocksExtension(() => 'var(--interactive-accent)');

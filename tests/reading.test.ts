@@ -5,7 +5,7 @@ import { ReadingControls, SectionInfo } from '../src/reading';
 import { Edit } from '../src/blocks';
 
 const controllers: ReadingControls[] = [];
-afterEach(() => { controllers.splice(0).forEach(c => c.destroy()); document.body.replaceChildren(); vi.restoreAllMocks(); });
+afterEach(() => { controllers.splice(0).forEach(c => c.destroy()); document.getSelection()?.removeAllRanges(); document.body.replaceChildren(); vi.restoreAllMocks(); });
 const rect = (top: number, height = 30) => ({ x: 200, y: top, top, bottom: top + height, left: 200, right: 600, width: 400, height, toJSON() {} } as DOMRect);
 function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Second</p>'], lines = [0, 2]) {
   let text = initial;
@@ -48,6 +48,22 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
 describe('Reading view controls', () => {
+  it('replaces Reading text selection paint with the containing block background', () => {
+    const f = fixture();
+    const text = f.elements[0].querySelector('p')!.firstChild!;
+    const range = document.createRange(); range.setStart(text, 1); range.setEnd(text, 4);
+    const selection = document.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    const highlight = f.root.querySelector<HTMLElement>('.blocks-selection-highlight')!;
+    expect(f.root.classList.contains('blocks-text-selected')).toBe(true);
+    expect(highlight.classList.contains('is-visible')).toBe(true);
+    expect(highlight.style.top).toBe('20px'); expect(highlight.style.height).toBe('30px');
+    expect(selection.toString()).toBe('irs');
+    selection.removeAllRanges(); document.dispatchEvent(new Event('selectionchange'));
+    expect(f.root.classList.contains('blocks-text-selected')).toBe(false);
+    expect(highlight.classList.contains('is-visible')).toBe(false);
+    expect(f.apply).not.toHaveBeenCalled();
+  });
   it('anchors to the visible paragraph inside its wrapper and remains aligned after scrolling', () => {
     const f = fixture();
     const paragraph = f.elements[0].firstElementChild as HTMLElement;

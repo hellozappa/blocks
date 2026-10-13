@@ -46,7 +46,7 @@
   pointer-events: none;
   display: none;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--blocks-highlight-color, var(--interactive-accent)) 18%, transparent);
 }
 .blocks-selection-highlight.is-visible { display: block; }
 .blocks-controls svg { width: 20px; height: 20px; }
@@ -88,3 +88,19 @@
 }
 .blocks-reading { position: relative; }
 .blocks-reading-empty { min-height: 24px; }
+
+/* Keep CodeMirror's selection range for editing, but paint only the block background. */
+.blocks-editor[data-blocks-block-selected] .cm-selectionBackground,
+.blocks-editor[data-blocks-text-selected] .cm-selectionBackground { display: none !important; }
+/* Obsidian also paints selection spans directly inside text and inline code. */
+.blocks-editor[data-blocks-block-selected] .cm-line .cm-selection,
+.blocks-editor[data-blocks-block-selected] .cm-line .cm-inline-code .cm-selection,
+.blocks-editor[data-blocks-text-selected] .cm-line .cm-selection,
+.blocks-editor[data-blocks-text-selected] .cm-line .cm-inline-code .cm-selection { background-color: transparent !important; }
+.blocks-editor[data-blocks-block-selected] .cm-content ::selection,
+.blocks-editor[data-blocks-block-selected] .cm-content::selection,
+.blocks-editor[data-blocks-text-selected] .cm-content ::selection,
+.blocks-editor[data-blocks-text-selected] .cm-content::selection,
+.blocks-reading.blocks-text-selected ::selection { background: transparent !important; }
+.blocks-editor[data-blocks-block-selected] .cm-cursorLayer { visibility: hidden !important; }
+.blocks-editor[data-blocks-block-selected] .cm-content { caret-color: transparent !important; }

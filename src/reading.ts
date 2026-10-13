@@ -2,6 +2,7 @@ import { Block, Edit, bodyStart, insertBlock, moveBlock, parseBlocks } from './b
 import { createControls } from './controls';
 
 export interface ReadingHost {
+  highlightColor?(): string;
   read(): string;
   active(): boolean;
   apply(edit: Edit, snapshot: string, livePreview: boolean): Promise<boolean>;
@@ -49,6 +50,7 @@ export class ReadingControls {
     this.listen(root, 'pointerdown', event => {
       if (!this.controls.contains(event.target as Node)) { this.selected = undefined; this.paintSelection(); }
     });
+    this.listen(root.ownerDocument, 'selectionchange', () => this.paintSelection());
     this.listen(root, 'scroll', () => this.refresh());
     this.listen(root, 'load', () => this.schedule(), true);
     this.listen(this.plus, 'pointerdown', event => event.preventDefault());
@@ -89,7 +91,7 @@ export class ReadingControls {
 
   refresh(): void {
     if (this.destroyed) return;
-    if (!this.host.active()) { this.cancel(); this.hide(); this.highlight.classList.remove('is-visible'); return; }
+    if (!this.host.active()) { this.cancel(); this.hide(); this.highlight.classList.remove('is-visible'); this.root.classList.remove('blocks-text-selected'); return; }
     const source = this.host.read();
     if (!this.initialized || source !== this.source) {
       const oldBody = bodyStart(this.source);
@@ -178,11 +180,23 @@ export class ReadingControls {
   }
   private hide(): void { this.controls.classList.remove('is-visible'); }
   private paintSelection(): void {
+    this.highlight.style.setProperty('--blocks-highlight-color', this.host.highlightColor?.() ?? 'var(--interactive-accent)');
     const hovered = this.blocks[this.hovered ?? -1];
     const pressed = this.selected !== undefined && hovered?.from === this.selected;
     this.handle.classList.toggle('is-selected', pressed);
     this.handle.setAttribute('aria-pressed', String(pressed));
-    const g = this.geometry.find(g => g.block.from === this.selected);
+    const selection = this.root.ownerDocument.getSelection();
+    const range = selection && !selection.isCollapsed && selection.rangeCount === 1
+      && this.root.contains(selection.anchorNode) && this.root.contains(selection.focusNode)
+      ? selection.getRangeAt(0) : undefined;
+    const matching = this.selected !== undefined
+      ? this.geometry.filter(g => g.block.from === this.selected)
+      : this.geometry.filter(g => range && g.elements.some(element => range.intersectsNode(element)));
+    this.root.classList.toggle('blocks-text-selected', matching.length > 0 && !!range && this.host.active());
+    const g = matching.length ? {
+      top: Math.min(...matching.map(g => g.top)), bottom: Math.max(...matching.map(g => g.bottom)),
+      left: Math.min(...matching.map(g => g.left)), right: Math.max(...matching.map(g => g.right)),
+    } : undefined;
     const visible = !!g && !this.drag?.active && this.host.active();
     this.highlight.classList.toggle('is-visible', visible);
     if (g && visible) this.position(this.highlight, g.left, g.top, g.right - g.left, g.bottom - g.top);
@@ -291,7 +305,7 @@ export class ReadingControls {
     this.cleanup.forEach(fn => fn());
     for (const blank of this.blanks.values()) blank.remove();
     this.controls.remove(); this.highlight.remove(); this.marker.remove();
-    this.root.classList.remove('blocks-reading');
+    this.root.classList.remove('blocks-reading', 'blocks-text-selected');
     this.sections.clear();
   }
 }

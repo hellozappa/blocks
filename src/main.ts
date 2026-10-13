@@ -1,5 +1,6 @@
 import { MarkdownRenderChild, MarkdownView, Notice, Plugin } from 'obsidian';
-import { blocksExtension } from './editor';
+import { createBlocksExtension } from './editor';
+import { BlocksSettingsTab, defaultSettings, highlightColor, loadSettings } from './settings';
 import { ReadingControls } from './reading';
 import { applyReadingEdit } from './reading-edit';
 
@@ -19,8 +20,24 @@ export default class BlocksPlugin extends Plugin {
   private reading = new Map<MarkdownView, { path: string; controls: ReadingControls; active: boolean }>();
   private disposed = false;
 
-  onload(): void {
-    this.registerEditorExtension(blocksExtension);
+  settings = { ...defaultSettings };
+  private savedData: Record<string, unknown> = {};
+
+  async saveSettings(): Promise<void> {
+    await this.saveData({ ...this.savedData, ...this.settings });
+    this.app.workspace.iterateAllLeaves(leaf => {
+      leaf.view.containerEl.querySelectorAll<HTMLElement>('.blocks-selection-highlight').forEach(element => {
+        element.style.setProperty('--blocks-highlight-color', highlightColor(this.settings));
+      });
+    });
+  }
+
+  async onload(): Promise<void> {
+    const data = await this.loadData();
+    this.savedData = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    this.settings = loadSettings(this.savedData);
+    this.addSettingTab(new BlocksSettingsTab(this, this));
+    this.registerEditorExtension(createBlocksExtension(() => highlightColor(this.settings)));
     this.registerMarkdownPostProcessor((element, context) => {
       context.addChild(new ReadingSection(element, () => {
         if (this.disposed) return;
@@ -47,6 +64,7 @@ export default class BlocksPlugin extends Plugin {
     existing?.controls.destroy();
     const root = view.previewMode.containerEl.querySelector<HTMLElement>('.markdown-preview-view') ?? view.previewMode.containerEl;
     const controls = new ReadingControls(root, {
+      highlightColor: () => highlightColor(this.settings),
       read: () => view.getViewData(),
       active: () => view.getMode() === 'preview' && view.file?.path === path,
       apply: async (edit, snapshot, livePreview) => {
