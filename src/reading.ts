@@ -3,6 +3,8 @@ import { createControls } from './controls';
 
 export interface ReadingHost {
   highlightColor?(): string;
+  clickToEdit?(): boolean;
+  open?(offset: number, snapshot: string): Promise<boolean>;
   read(): string;
   active(): boolean;
   apply(edit: Edit, snapshot: string, livePreview: boolean): Promise<boolean>;
@@ -48,8 +50,9 @@ export class ReadingControls {
     this.listen(root, 'pointermove', event => this.hover(event as PointerEvent));
     this.listen(root, 'pointerleave', () => { if (!this.drag && this.selected === undefined) this.hide(); });
     this.listen(root, 'pointerdown', event => {
-      if (!this.controls.contains(event.target as Node)) { this.selected = undefined; this.paintSelection(); }
+      if (!this.controls.contains(event.target as Node) && !this.clickTarget(event as MouseEvent)) { this.selected = undefined; this.paintSelection(); }
     });
+    this.listen(root, 'click', event => this.click(event as MouseEvent), true);
     this.listen(root.ownerDocument, 'selectionchange', () => this.paintSelection());
     this.listen(root, 'scroll', () => this.refresh());
     this.listen(root, 'load', () => this.schedule(), true);
@@ -178,6 +181,38 @@ export class ReadingControls {
     this.controls.classList.add('is-visible');
     this.paintSelection();
   }
+  private clickTarget(event: MouseEvent): Geometry | undefined {
+    const target = event.target as Element | null;
+    if (!this.host.clickToEdit?.() || !this.host.open || !this.host.active() || this.pending || this.drag
+      || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+      || !target?.closest || this.controls.contains(target)
+      || target.closest('a, button, input, textarea, select, [contenteditable="true"], .markdown-embed, .clickable-icon')) return;
+    return this.geometry.find(g => g.elements.some(element => element.contains(target)));
+  }
+
+  private click(event: MouseEvent): void {
+    this.refresh();
+    const target = this.clickTarget(event);
+    if (!target) return;
+    const selection = this.root.ownerDocument.getSelection();
+    if (selection && !selection.isCollapsed && this.root.contains(selection.anchorNode)) return;
+    event.preventDefault(); event.stopPropagation();
+    if (this.selected === target.block.from) {
+      void this.open(target.block.from);
+    } else {
+      this.selected = target.block.from;
+      this.show(target);
+      this.handle.focus({ preventScroll: true });
+    }
+  }
+
+  private async open(offset: number): Promise<void> {
+    this.pending = true;
+    try { await this.host.open!(offset, this.source); }
+    catch (error) { this.host.report(error); }
+    finally { this.pending = false; this.refresh(); }
+  }
+
   private hide(): void { this.controls.classList.remove('is-visible'); }
   private paintSelection(): void {
     this.highlight.style.setProperty('--blocks-highlight-color', this.host.highlightColor?.() ?? 'var(--interactive-accent)');

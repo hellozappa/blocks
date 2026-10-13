@@ -2,7 +2,7 @@ import { MarkdownRenderChild, MarkdownView, Notice, Plugin } from 'obsidian';
 import { createBlocksExtension } from './editor';
 import { BlocksSettingsTab, defaultSettings, highlightColor, loadSettings } from './settings';
 import { ReadingControls } from './reading';
-import { applyReadingEdit } from './reading-edit';
+import { applyReadingEdit, openReadingBlock } from './reading-edit';
 
 class ReadingSection extends MarkdownRenderChild {
   private frame = 0;
@@ -65,6 +65,8 @@ export default class BlocksPlugin extends Plugin {
     const root = view.previewMode.containerEl.querySelector<HTMLElement>('.markdown-preview-view') ?? view.previewMode.containerEl;
     const controls = new ReadingControls(root, {
       highlightColor: () => highlightColor(this.settings),
+      clickToEdit: () => this.settings.readingClickToEdit,
+      open: (offset, snapshot) => openReadingBlock(view, path, offset, snapshot),
       read: () => view.getViewData(),
       active: () => view.getMode() === 'preview' && view.file?.path === path,
       apply: async (edit, snapshot, livePreview) => {

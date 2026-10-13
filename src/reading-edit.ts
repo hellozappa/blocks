@@ -35,3 +35,14 @@ export async function applyReadingEdit(view: MarkdownView, path: string, edit: E
   }
   return true;
 }
+
+export async function openReadingBlock(view: MarkdownView, path: string, offset: number, snapshot: string): Promise<boolean> {
+  if (view.file?.path !== path || view.getMode() !== 'preview' || view.getViewData() !== snapshot
+    || offset < 0 || offset > snapshot.length) return false;
+  const state = view.leaf.getViewState();
+  await view.leaf.setViewState({ ...state, state: { ...state.state, mode: 'source', source: false } });
+  if (view.file?.path !== path || view.editor.getValue() !== snapshot) return false;
+  view.editor.setCursor(view.editor.offsetToPos(offset));
+  view.editor.focus();
+  return true;
+}

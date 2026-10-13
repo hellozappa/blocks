@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 
-export interface BlocksSettings { useAccentColor: boolean; highlightColor: string }
-export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE' };
+export interface BlocksSettings { useAccentColor: boolean; highlightColor: string; readingClickToEdit: boolean }
+export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE', readingClickToEdit: true };
 
 export function normalizeHex(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -13,6 +13,7 @@ export function normalizeHex(value: unknown): string | undefined {
 
 export function loadSettings(data: Partial<BlocksSettings> | null | undefined): BlocksSettings {
   return {
+    readingClickToEdit: typeof data?.readingClickToEdit === 'boolean' ? data.readingClickToEdit : true,
     useAccentColor: typeof data?.useAccentColor === 'boolean' ? data.useAccentColor : defaultSettings.useAccentColor,
     highlightColor: normalizeHex(data?.highlightColor) ?? defaultSettings.highlightColor,
   };
@@ -35,6 +36,13 @@ export class BlocksSettingsTab extends PluginSettingTab {
 
   display(): void {
     this.containerEl.empty();
+    new Setting(this.containerEl)
+      .setName('Click blocks to edit in Reading view')
+      .setDesc('Click a block to select it. Click the selected block again to open Live Preview. Links and interactive controls keep their normal behavior.')
+      .addToggle(toggle => toggle.setValue(this.host.settings.readingClickToEdit).onChange(async value => {
+        this.host.settings.readingClickToEdit = value;
+        await this.host.saveSettings();
+      }));
     new Setting(this.containerEl)
       .setName('Use Obsidian accent color')
       .setDesc('Follow the accent color in Settings > Appearance. Turn this off to use a custom highlight color.')

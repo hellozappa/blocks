@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MarkdownView, EditorTransaction } from 'obsidian';
 import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
-import { applyReadingEdit } from '../src/reading-edit';
+import { applyReadingEdit, openReadingBlock } from '../src/reading-edit';
 import { insertBlock, moveBlock, parseBlocks } from '../src/blocks';
 
 function fixture(initial = 'First\n\nSecond') {
@@ -24,6 +24,24 @@ function fixture(initial = 'First\n\nSecond') {
   return { view, typed: view as unknown as MarkdownView, text: () => state.doc.toString(), setCanonical: (text: string) => { canonical = text; }, undo: () => undo({ state, dispatch: tx => { state = tx.state; } }) };
 }
 describe('Reading view editor bridge', () => {
+  it('opens the selected block in Live Preview without writing note content or adding an undo step', async () => {
+    const f = fixture();
+    expect(await openReadingBlock(f.typed, 'Test.md', 7, f.text())).toBe(true);
+    expect(f.view.leaf.setViewState).toHaveBeenCalledWith({ type: 'markdown', state: { file: 'Test.md', mode: 'source', source: false, backlinks: false } });
+    expect(f.view.editor.setCursor).toHaveBeenCalledWith({ line: 2, ch: 0 });
+    expect(f.view.editor.focus).toHaveBeenCalledOnce();
+    expect(f.view.editor.transaction).not.toHaveBeenCalled();
+    expect(f.view.setViewData).not.toHaveBeenCalled(); expect(f.view.requestSave).not.toHaveBeenCalled();
+    expect(f.text()).toBe('First\n\nSecond'); expect(f.undo()).toBe(false);
+  });
+  it('rejects stale click snapshots and avoids focusing a file navigated to during the switch', async () => {
+    const f = fixture();
+    expect(await openReadingBlock(f.typed, 'Test.md', 0, 'stale')).toBe(false);
+    expect(f.view.leaf.setViewState).not.toHaveBeenCalled();
+    f.view.leaf.setViewState.mockImplementation(async () => { f.view.file.path = 'Other.md'; });
+    expect(await openReadingBlock(f.typed, 'Test.md', 0, f.text())).toBe(false);
+    expect(f.view.editor.focus).not.toHaveBeenCalled(); expect(f.view.editor.setCursor).not.toHaveBeenCalled();
+  });
   it('preserves current Reading-view metadata when the hidden editor is stale and updates the saved view', async () => {
     const f = fixture('---\nmodified: old\n---\n\nFirst\n\nSecond');
     const source = '---\nmodified: current\n---\n\nFirst\n\nSecond';

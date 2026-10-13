@@ -10,6 +10,7 @@ const rect = (top: number, height = 30) => ({ x: 200, y: top, top, bottom: top +
 function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Second</p>'], lines = [0, 2]) {
   let text = initial;
   let active = true;
+  let clickToEdit = true;
   const root = document.createElement('div'); root.className = 'markdown-preview-view';
   root.innerHTML = '<div class="markdown-preview-section"></div>';
   document.body.append(root);
@@ -31,7 +32,8 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
     return true;
   });
   const report = vi.fn();
-  const controller = new ReadingControls(root, { read: () => text, active: () => active, apply, report });
+  const open = vi.fn(async (_offset: number, _snapshot: string) => { active = false; return true; });
+  const controller = new ReadingControls(root, { clickToEdit: () => clickToEdit, open, read: () => text, active: () => active, apply, report });
   controllers.push(controller);
   elements.forEach((el, i) => controller.addSection(el, () => ({ text: initial, lineStart: lines[i], lineEnd: lines[i] })));
   controller.refresh();
@@ -43,11 +45,46 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
     const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
     Object.defineProperty(event, 'pointerId', { value: 1 }); handle.dispatchEvent(event);
   };
-  return { root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
+  return { open, setClickToEdit: (value: boolean) => { clickToEdit = value; }, root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
 describe('Reading view controls', () => {
+  it('selects on first content click and opens Live Preview on the second click of the same block', async () => {
+    const f = fixture();
+    const click = (index: number) => {
+      const paragraph = f.elements[index].querySelector('p')!;
+      paragraph.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      paragraph.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+    };
+    click(0);
+    expect(f.root.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+    expect(f.handle.getAttribute('aria-pressed')).toBe('true');
+    expect(f.open).not.toHaveBeenCalled();
+    click(1);
+    expect(f.open).not.toHaveBeenCalled();
+    click(1); await settle();
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(7, 'First\n\nSecond');
+    expect(f.apply).not.toHaveBeenCalled(); expect(f.text()).toBe('First\n\nSecond');
+  });
+  it('honors the live toggle and preserves link, checkbox, modified-click, and text-selection behavior', () => {
+    const f = fixture('First\n\nSecond', ['<p>First <a href="https://example.com">link</a><input type="checkbox"></p>', '<p>Second</p>']);
+    const click = (target: Element, options = {}) => target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...options }));
+    expect(click(f.elements[0].querySelector('a')!)).toBe(true);
+    expect(click(f.elements[0].querySelector('input')!)).toBe(true);
+    expect(click(f.elements[1].querySelector('p')!, { metaKey: true })).toBe(true);
+    const range = document.createRange(); const text = f.elements[1].querySelector('p')!.firstChild!;
+    range.setStart(text, 0); range.setEnd(text, 3); document.getSelection()!.addRange(range);
+    expect(click(f.elements[1].querySelector('p')!)).toBe(true);
+    document.getSelection()!.removeAllRanges();
+    f.setClickToEdit(false);
+    expect(click(f.elements[1].querySelector('p')!)).toBe(true);
+    expect(f.open).not.toHaveBeenCalled(); expect(f.handle.getAttribute('aria-pressed')).toBe('false');
+    f.setClickToEdit(true);
+    expect(click(f.elements[1].querySelector('p')!)).toBe(false);
+    expect(f.handle.getAttribute('aria-pressed')).toBe('true');
+    expect(f.open).not.toHaveBeenCalled();
+  });
   it('replaces Reading text selection paint with the containing block background', () => {
     const f = fixture();
     const text = f.elements[0].querySelector('p')!.firstChild!;
