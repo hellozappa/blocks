@@ -1,9 +1,11 @@
 import { Block, Edit, bodyStart, insertBlock, moveBlock, parseBlocks } from './blocks';
 import { createControls } from './controls';
+import { readingClickOffset, type CursorPlacement } from './reading-cursor';
 
 export interface ReadingHost {
   highlightColor?(): string;
   clickToEdit?(): boolean;
+  cursorPlacement?(): CursorPlacement;
   open?(offset: number, snapshot: string): Promise<boolean>;
   read(): string;
   active(): boolean;
@@ -198,7 +200,10 @@ export class ReadingControls {
     if (selection && !selection.isCollapsed && this.root.contains(selection.anchorNode)) return;
     event.preventDefault(); event.stopPropagation();
     if (this.selected === target.block.from) {
-      void this.open(target.block.from);
+      const placement = this.host.cursorPlacement?.() ?? 'click';
+      const offset = placement === 'start' ? target.block.from : placement === 'end' ? target.block.to
+        : readingClickOffset(this.source, target.block, target.elements, event.clientX, event.clientY);
+      void this.open(offset);
     } else {
       this.selected = target.block.from;
       this.show(target);

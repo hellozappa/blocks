@@ -11,7 +11,7 @@ Paragraphs include their soft line breaks. Headings, top-level list items, image
 
 The plugin preserves Markdown content and uses blank lines for empty blocks. Moving content can add blank lines where Markdown needs them to keep neighboring blocks separate. List items retain their markers and numbering. The plugin does not renumber ordered lists. Reduced-motion preferences disable the control and neighboring-block transitions.
 
-By default, clicking a block in Reading view selects it; clicking that selected block again opens Live Preview with the caret at the block start. Disable this behavior in Settings > Blocks. Links, interactive controls, modified clicks, and text-selection gestures keep their normal behavior.
+By default, clicking a block in Reading view selects it; clicking that selected block again opens Live Preview with the caret where you clicked. In Settings > Blocks, you can instead choose the beginning or end of the block. Images and other widgets without a text caret use a block boundary. Disable this behavior in Settings > Blocks. Links, interactive controls, modified clicks, and text-selection gestures keep their normal behavior.
 
 Reading view controls operate on the note's own rendered sections, including images and top-level list items with their nested content. Moves keep the note in Reading view. The plus button inserts a blank block and switches that note to Live Preview with the caret ready for typing. Blank blocks have visible space in Reading view. Embedded notes do not receive controls that could edit the host note. A move is cancelled if the note changes during the drag.
 

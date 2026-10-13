@@ -11,6 +11,7 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
   let text = initial;
   let active = true;
   let clickToEdit = true;
+  let cursorPlacement: 'click' | 'start' | 'end' = 'click';
   const root = document.createElement('div'); root.className = 'markdown-preview-view';
   root.innerHTML = '<div class="markdown-preview-section"></div>';
   document.body.append(root);
@@ -33,7 +34,7 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
   });
   const report = vi.fn();
   const open = vi.fn(async (_offset: number, _snapshot: string) => { active = false; return true; });
-  const controller = new ReadingControls(root, { clickToEdit: () => clickToEdit, open, read: () => text, active: () => active, apply, report });
+  const controller = new ReadingControls(root, { clickToEdit: () => clickToEdit, cursorPlacement: () => cursorPlacement, open, read: () => text, active: () => active, apply, report });
   controllers.push(controller);
   elements.forEach((el, i) => controller.addSection(el, () => ({ text: initial, lineStart: lines[i], lineEnd: lines[i] })));
   controller.refresh();
@@ -45,7 +46,7 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
     const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
     Object.defineProperty(event, 'pointerId', { value: 1 }); handle.dispatchEvent(event);
   };
-  return { open, setClickToEdit: (value: boolean) => { clickToEdit = value; }, root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
+  return { setCursorPlacement: (value: typeof cursorPlacement) => { cursorPlacement = value; }, open, setClickToEdit: (value: boolean) => { clickToEdit = value; }, root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
@@ -66,6 +67,23 @@ describe('Reading view controls', () => {
     click(1); await settle();
     expect(f.open).toHaveBeenCalledExactlyOnceWith(7, 'First\n\nSecond');
     expect(f.apply).not.toHaveBeenCalled(); expect(f.text()).toBe('First\n\nSecond');
+  });
+  it.each(['click', 'start', 'end'] as const)('uses the %s cursor placement on the second click', async placement => {
+    const f = fixture(); f.setCursorPlacement(placement);
+    const paragraph = f.elements[1].querySelector('p')!;
+    const range = document.createRange(); range.setStart(paragraph.firstChild!, 3); range.collapse(true);
+    const hit = vi.fn(() => range);
+    Object.defineProperty(document, 'caretRangeFromPoint', { value: hit, configurable: true });
+    try {
+      paragraph.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 320, clientY: 110 }));
+      expect(f.open).not.toHaveBeenCalled();
+      paragraph.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 350, clientY: 110 }));
+      await settle();
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(placement === 'click' ? 10 : placement === 'start' ? 7 : 13, 'First\n\nSecond');
+      if (placement === 'click') expect(hit).toHaveBeenCalledWith(350, 110);
+      else expect(hit).not.toHaveBeenCalled();
+      expect(f.apply).not.toHaveBeenCalled();
+    } finally { Reflect.deleteProperty(document, 'caretRangeFromPoint'); }
   });
   it('honors the live toggle and preserves link, checkbox, modified-click, and text-selection behavior', () => {
     const f = fixture('First\n\nSecond', ['<p>First <a href="https://example.com">link</a><input type="checkbox"></p>', '<p>Second</p>']);

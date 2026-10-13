@@ -66,6 +66,7 @@ export default class BlocksPlugin extends Plugin {
     const controls = new ReadingControls(root, {
       highlightColor: () => highlightColor(this.settings),
       clickToEdit: () => this.settings.readingClickToEdit,
+      cursorPlacement: () => this.settings.readingCursorPlacement,
       open: (offset, snapshot) => openReadingBlock(view, path, offset, snapshot),
       read: () => view.getViewData(),
       active: () => view.getMode() === 'preview' && view.file?.path === path,

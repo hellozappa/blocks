@@ -13,6 +13,9 @@ describe('highlight settings', () => {
   it('loads saved colors, defaults safely, and follows accent changes through the CSS variable', () => {
     expect(loadSettings(null)).toEqual(defaultSettings);
     expect(loadSettings({}).readingClickToEdit).toBe(true);
+    expect(loadSettings({}).readingCursorPlacement).toBe('click');
+    expect(loadSettings({ readingCursorPlacement: 'start' }).readingCursorPlacement).toBe('start');
+    expect(loadSettings({ readingCursorPlacement: 'end' }).readingCursorPlacement).toBe('end');
     expect(loadSettings({ readingClickToEdit: false }).readingClickToEdit).toBe(false);
     expect(loadSettings({ highlightColor: 'bad-color' })).toEqual(defaultSettings);
     const custom = loadSettings({ useAccentColor: false, highlightColor: '#abc' });

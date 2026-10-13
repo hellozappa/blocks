@@ -1,7 +1,8 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
+import type { CursorPlacement } from './reading-cursor';
 
-export interface BlocksSettings { useAccentColor: boolean; highlightColor: string; readingClickToEdit: boolean }
-export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE', readingClickToEdit: true };
+export interface BlocksSettings { useAccentColor: boolean; highlightColor: string; readingClickToEdit: boolean; readingCursorPlacement: CursorPlacement }
+export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE', readingClickToEdit: true, readingCursorPlacement: 'click' };
 
 export function normalizeHex(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -13,6 +14,7 @@ export function normalizeHex(value: unknown): string | undefined {
 
 export function loadSettings(data: Partial<BlocksSettings> | null | undefined): BlocksSettings {
   return {
+    readingCursorPlacement: data?.readingCursorPlacement === 'start' || data?.readingCursorPlacement === 'end' ? data.readingCursorPlacement : 'click',
     readingClickToEdit: typeof data?.readingClickToEdit === 'boolean' ? data.readingClickToEdit : true,
     useAccentColor: typeof data?.useAccentColor === 'boolean' ? data.useAccentColor : defaultSettings.useAccentColor,
     highlightColor: normalizeHex(data?.highlightColor) ?? defaultSettings.highlightColor,
@@ -43,6 +45,15 @@ export class BlocksSettingsTab extends PluginSettingTab {
         this.host.settings.readingClickToEdit = value;
         await this.host.saveSettings();
       }));
+    new Setting(this.containerEl)
+      .setName('Cursor position when opening Live Preview')
+      .setDesc('Choose where the cursor goes after the second click on a selected block in Reading view.')
+      .addDropdown(dropdown => dropdown.addOptions({ click: 'Where you click', start: 'Beginning of block', end: 'End of block' })
+        .setValue(this.host.settings.readingCursorPlacement).onChange(async value => {
+          if (value !== 'click' && value !== 'start' && value !== 'end') return;
+          this.host.settings.readingCursorPlacement = value;
+          await this.host.saveSettings();
+        }));
     new Setting(this.containerEl)
       .setName('Use Obsidian accent color')
       .setDesc('Follow the accent color in Settings > Appearance. Turn this off to use a custom highlight color.')
