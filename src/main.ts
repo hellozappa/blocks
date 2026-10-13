@@ -67,7 +67,7 @@ export default class BlocksPlugin extends Plugin {
       highlightColor: () => highlightColor(this.settings),
       clickToEdit: () => this.settings.readingClickToEdit,
       cursorPlacement: () => this.settings.readingCursorPlacement,
-      open: (offset, snapshot) => openReadingBlock(view, path, offset, snapshot),
+      open: (offset, snapshot, screenTop) => openReadingBlock(view, path, offset, snapshot, screenTop),
       read: () => view.getViewData(),
       active: () => view.getMode() === 'preview' && view.file?.path === path,
       apply: async (edit, snapshot, livePreview) => {

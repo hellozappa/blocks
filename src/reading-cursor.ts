@@ -95,9 +95,9 @@ export function sourceOffsetAtCaret(source: string, block: Block, elements: read
   return block.to;
 }
 
-export function readingClickOffset(source: string, block: Block, elements: readonly HTMLElement[], x: number, y: number): number {
+export function readingClickPosition(source: string, block: Block, elements: readonly HTMLElement[], x: number, y: number): { offset: number; screenTop?: number } {
   const document = elements[0]?.ownerDocument;
-  if (!document) return block.from;
+  if (!document) return { offset: block.from };
   const api = document as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -108,9 +108,22 @@ export function readingClickOffset(source: string, block: Block, elements: reado
   const offset = position?.offset ?? range?.startOffset;
   if (node && offset !== undefined) {
     const mapped = sourceOffsetAtCaret(source, block, elements, node, offset);
-    if (mapped !== undefined) return mapped;
+    if (mapped !== undefined) {
+      const caret = document.createRange(); caret.setStart(node, offset); caret.collapse(true);
+      let rect = caret.getClientRects?.()[0];
+      if (!rect?.height && node.nodeType === 3 && node.textContent?.length) {
+        const char = Math.min(offset, node.textContent.length - 1);
+        caret.setStart(node, char); caret.setEnd(node, char + 1);
+        rect = caret.getClientRects?.()[0];
+      }
+      return { offset: mapped, screenTop: rect?.height ? rect.top : undefined };
+    }
   }
   // Images and other widgets may have no rendered text caret.
   const last = elements[elements.length - 1]?.getBoundingClientRect();
-  return last && y >= last.bottom ? block.to : block.from;
+  return { offset: last && y >= last.bottom ? block.to : block.from };
+}
+
+export function readingClickOffset(source: string, block: Block, elements: readonly HTMLElement[], x: number, y: number): number {
+  return readingClickPosition(source, block, elements, x, y).offset;
 }

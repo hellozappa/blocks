@@ -65,7 +65,7 @@ describe('Reading view controls', () => {
     click(1);
     expect(f.open).not.toHaveBeenCalled();
     click(1); await settle();
-    expect(f.open).toHaveBeenCalledExactlyOnceWith(7, 'First\n\nSecond');
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(7, 'First\n\nSecond', undefined);
     expect(f.apply).not.toHaveBeenCalled(); expect(f.text()).toBe('First\n\nSecond');
   });
   it.each(['click', 'start', 'end'] as const)('uses the %s cursor placement on the second click', async placement => {
@@ -79,7 +79,7 @@ describe('Reading view controls', () => {
       expect(f.open).not.toHaveBeenCalled();
       paragraph.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 350, clientY: 110 }));
       await settle();
-      expect(f.open).toHaveBeenCalledExactlyOnceWith(placement === 'click' ? 10 : placement === 'start' ? 7 : 13, 'First\n\nSecond');
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(placement === 'click' ? 10 : placement === 'start' ? 7 : 13, 'First\n\nSecond', undefined);
       if (placement === 'click') expect(hit).toHaveBeenCalledWith(350, 110);
       else expect(hit).not.toHaveBeenCalled();
       expect(f.apply).not.toHaveBeenCalled();

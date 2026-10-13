@@ -1,12 +1,12 @@
 import { Block, Edit, bodyStart, insertBlock, moveBlock, parseBlocks } from './blocks';
 import { createControls } from './controls';
-import { readingClickOffset, type CursorPlacement } from './reading-cursor';
+import { readingClickPosition, type CursorPlacement } from './reading-cursor';
 
 export interface ReadingHost {
   highlightColor?(): string;
   clickToEdit?(): boolean;
   cursorPlacement?(): CursorPlacement;
-  open?(offset: number, snapshot: string): Promise<boolean>;
+  open?(offset: number, snapshot: string, screenTop?: number): Promise<boolean>;
   read(): string;
   active(): boolean;
   apply(edit: Edit, snapshot: string, livePreview: boolean): Promise<boolean>;
@@ -201,9 +201,10 @@ export class ReadingControls {
     event.preventDefault(); event.stopPropagation();
     if (this.selected === target.block.from) {
       const placement = this.host.cursorPlacement?.() ?? 'click';
-      const offset = placement === 'start' ? target.block.from : placement === 'end' ? target.block.to
-        : readingClickOffset(this.source, target.block, target.elements, event.clientX, event.clientY);
-      void this.open(offset);
+      const position = placement === 'click'
+        ? readingClickPosition(this.source, target.block, target.elements, event.clientX, event.clientY)
+        : { offset: placement === 'start' ? target.block.from : target.block.to };
+      void this.open(position.offset, position.screenTop);
     } else {
       this.selected = target.block.from;
       this.show(target);
@@ -211,9 +212,9 @@ export class ReadingControls {
     }
   }
 
-  private async open(offset: number): Promise<void> {
+  private async open(offset: number, screenTop?: number): Promise<void> {
     this.pending = true;
-    try { await this.host.open!(offset, this.source); }
+    try { await this.host.open!(offset, this.source, screenTop); }
     catch (error) { this.host.report(error); }
     finally { this.pending = false; this.refresh(); }
   }

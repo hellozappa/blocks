@@ -1,5 +1,7 @@
 import type { MarkdownView } from 'obsidian';
 import type { Edit } from './blocks';
+import { EditorView } from '@codemirror/view';
+import { anchorReadingCursor } from './reading-scroll';
 
 export async function applyReadingEdit(view: MarkdownView, path: string, edit: Edit, snapshot: string, livePreview: boolean): Promise<boolean> {
   if (view.file?.path !== path || view.getMode() !== 'preview' || view.getViewData() !== snapshot) return false;
@@ -36,13 +38,19 @@ export async function applyReadingEdit(view: MarkdownView, path: string, edit: E
   return true;
 }
 
-export async function openReadingBlock(view: MarkdownView, path: string, offset: number, snapshot: string): Promise<boolean> {
+export async function openReadingBlock(view: MarkdownView, path: string, offset: number, snapshot: string, screenTop?: number): Promise<boolean> {
   if (view.file?.path !== path || view.getMode() !== 'preview' || view.getViewData() !== snapshot
     || offset < 0 || offset > snapshot.length) return false;
   const state = view.leaf.getViewState();
   await view.leaf.setViewState({ ...state, state: { ...state.state, mode: 'source', source: false } });
   if (view.file?.path !== path || view.editor.getValue() !== snapshot) return false;
-  view.editor.setCursor(view.editor.offsetToPos(offset));
-  view.editor.focus();
+  const editorDOM = view.containerEl?.querySelector<HTMLElement>('.cm-editor');
+  const cm = editorDOM ? EditorView.findFromDOM(editorDOM) : null;
+  if (cm && screenTop !== undefined) {
+    anchorReadingCursor(cm, offset, screenTop, () => view.file?.path === path && view.getMode() === 'source' && view.editor.getValue() === snapshot);
+  } else {
+    view.editor.setCursor(view.editor.offsetToPos(offset));
+    view.editor.focus();
+  }
   return true;
 }

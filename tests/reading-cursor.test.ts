@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sourceOffsetAtCaret, readingClickOffset } from '../src/reading-cursor';
+import { sourceOffsetAtCaret, readingClickOffset, readingClickPosition } from '../src/reading-cursor';
 import { parseBlocks } from '../src/blocks';
 afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 function paragraph(html: string) { const element = document.createElement('p'); element.innerHTML = html; document.body.append(element); return element; }
@@ -39,6 +39,18 @@ describe('Reading click cursor mapping', () => {
     expect(readingClickOffset(source, parseBlocks(source)[0], [element], 245, 38)).toBe(5);
     expect(hit).toHaveBeenCalledWith(245, 38);
     Reflect.deleteProperty(document, 'caretRangeFromPoint');
+  });
+  it('captures the rendered text line top before switching modes', () => {
+    const source = 'A paragraph.'; const element = paragraph(source);
+    const range = document.createRange(); range.setStart(element.firstChild!, 5); range.collapse(true);
+    Object.defineProperty(document, 'caretRangeFromPoint', { value: () => range, configurable: true });
+    Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: () => [{ top: 225, height: 24 }] });
+    try {
+      expect(readingClickPosition(source, parseBlocks(source)[0], [element], 245, 238)).toEqual({ offset: 5, screenTop: 225 });
+    } finally {
+      Reflect.deleteProperty(document, 'caretRangeFromPoint');
+      Reflect.deleteProperty(Range.prototype, 'getClientRects');
+    }
   });
   it('rejects carets outside the block and falls back for a widget without a text caret', () => {
     const source = '![[Photo.png]]'; const element = paragraph('<img>'); const other = paragraph('Other');
