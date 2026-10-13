@@ -1,8 +1,8 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type { CursorPlacement } from './reading-cursor';
 
-export interface BlocksSettings { useAccentColor: boolean; highlightColor: string; readingClickToEdit: boolean; readingCursorPlacement: CursorPlacement }
-export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE', readingClickToEdit: true, readingCursorPlacement: 'click' };
+export interface BlocksSettings { useAccentColor: boolean; highlightColor: string; readingClickToEdit: boolean; readingCursorPlacement: CursorPlacement; optionArrowSelection: boolean }
+export const defaultSettings: BlocksSettings = { useAccentColor: true, highlightColor: '#7852EE', readingClickToEdit: true, readingCursorPlacement: 'click', optionArrowSelection: true };
 
 export function normalizeHex(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -14,6 +14,7 @@ export function normalizeHex(value: unknown): string | undefined {
 
 export function loadSettings(data: Partial<BlocksSettings> | null | undefined): BlocksSettings {
   return {
+    optionArrowSelection: typeof data?.optionArrowSelection === 'boolean' ? data.optionArrowSelection : true,
     readingCursorPlacement: data?.readingCursorPlacement === 'start' || data?.readingCursorPlacement === 'end' ? data.readingCursorPlacement : 'click',
     readingClickToEdit: typeof data?.readingClickToEdit === 'boolean' ? data.readingClickToEdit : true,
     useAccentColor: typeof data?.useAccentColor === 'boolean' ? data.useAccentColor : defaultSettings.useAccentColor,
@@ -38,6 +39,13 @@ export class BlocksSettingsTab extends PluginSettingTab {
 
   display(): void {
     this.containerEl.empty();
+    new Setting(this.containerEl)
+      .setName('Option+arrows change the selected block')
+      .setDesc('Hold Option while pressing Up or Down to select the neighboring block without moving its content. Up and Down alone move the selected block.')
+      .addToggle(toggle => toggle.setValue(this.host.settings.optionArrowSelection).onChange(async value => {
+        this.host.settings.optionArrowSelection = value;
+        await this.host.saveSettings();
+      }));
     new Setting(this.containerEl)
       .setName('Click blocks to edit in Reading view')
       .setDesc('Click a block to select it. Click the selected block again to open Live Preview. Links and interactive controls keep their normal behavior.')

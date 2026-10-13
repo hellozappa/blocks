@@ -1,6 +1,7 @@
 import type { MarkdownView } from 'obsidian';
 import type { Edit } from './blocks';
 import { EditorView } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
 import { anchorReadingCursor } from './reading-scroll';
 
 export async function applyReadingEdit(view: MarkdownView, path: string, edit: Edit, snapshot: string, livePreview: boolean): Promise<boolean> {
@@ -19,13 +20,23 @@ export async function applyReadingEdit(view: MarkdownView, path: string, edit: E
   }
   const beforeCursor = next.slice(0, edit.cursor).split('\n');
   const cursor = { line: beforeCursor.length - 1, ch: beforeCursor[beforeCursor.length - 1].length };
-  view.editor.transaction({
-    changes: [{ from: view.editor.offsetToPos(change.from), to: view.editor.offsetToPos(change.to), text: change.insert }],
-    selections: [{ from: cursor }],
-  }, livePreview ? 'input.blocks' : 'move.blocks');
+  const editorDOM = !livePreview ? view.containerEl?.querySelector<HTMLElement>('.cm-editor') : null;
+  const cm = editorDOM ? EditorView.findFromDOM(editorDOM) : null;
+  if (cm) {
+    // Obsidian's Editor.transaction always requests scrolling, even for its hidden editor.
+    const changes = cm.state.changes(change);
+    const document = changes.apply(cm.state.doc);
+    const line = document.line(cursor.line + 1);
+    cm.dispatch({ changes, selection: { anchor: line.from + Math.min(cursor.ch, line.length) },
+      scrollIntoView: false, annotations: Transaction.userEvent.of('move.blocks') });
+  } else {
+    view.editor.transaction({
+      changes: [{ from: view.editor.offsetToPos(change.from), to: view.editor.offsetToPos(change.to), text: change.insert }],
+      selections: [{ from: cursor }],
+    }, livePreview ? 'input.blocks' : 'move.blocks');
+  }
   view.setViewData(next, false);
   view.requestSave();
-  view.previewMode.rerender(true);
   if (livePreview) {
     const state = view.leaf.getViewState();
     await view.leaf.setViewState({ ...state, state: { ...state.state, mode: 'source', source: false } });

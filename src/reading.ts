@@ -1,11 +1,15 @@
 import { Block, Edit, bodyStart, insertBlock, moveBlock, parseBlocks } from './blocks';
 import { createControls } from './controls';
+import type { KeyboardScopeControl, KeyboardScopeFactory } from './keyboard-scope';
 import { readingClickPosition, type CursorPlacement } from './reading-cursor';
 
 export interface ReadingHost {
+  keyboardScope?: KeyboardScopeFactory;
+  sectionInfo?(element: HTMLElement): SectionInfo | null;
   highlightColor?(): string;
   clickToEdit?(): boolean;
   cursorPlacement?(): CursorPlacement;
+  optionArrowSelection?(): boolean;
   open?(offset: number, snapshot: string, screenTop?: number): Promise<boolean>;
   read(): string;
   active(): boolean;
@@ -22,13 +26,17 @@ export class ReadingControls {
   private blocks: Block[] = [];
   private geometry: Geometry[] = [];
   private sections = new Map<HTMLElement, () => SectionInfo | null>();
+  private sectionInfo?: (element: HTMLElement) => SectionInfo | null;
   private blanks = new Map<number, HTMLElement>();
   private selected?: number;
+  private selectionAfterEdit?: { source: string; from: number };
+  private selectionPreview?: { from: number; elements: HTMLElement[]; text: (string | null)[] };
   private hovered?: number;
   private drag?: Drag;
   private frame = 0;
   private pending = false;
   private destroyed = false;
+  private keyboardScope?: KeyboardScopeControl;
   private readonly controls: HTMLElement;
   private readonly plus: HTMLButtonElement;
   private readonly handle: HTMLButtonElement;
@@ -39,6 +47,7 @@ export class ReadingControls {
 
   constructor(private readonly root: HTMLElement, private readonly host: ReadingHost) {
     this.win = root.ownerDocument.defaultView!;
+    this.sectionInfo = host.sectionInfo;
     const buttons = createControls(root.ownerDocument);
     this.controls = buttons.controls; this.plus = buttons.plus; this.handle = buttons.handle;
     this.highlight = root.ownerDocument.createElement('div');
@@ -52,10 +61,13 @@ export class ReadingControls {
     this.listen(root, 'pointermove', event => this.hover(event as PointerEvent));
     this.listen(root, 'pointerleave', () => { if (!this.drag && this.selected === undefined) this.hide(); });
     this.listen(root, 'pointerdown', event => {
-      if (!this.controls.contains(event.target as Node) && !this.clickTarget(event as MouseEvent)) { this.selected = undefined; this.paintSelection(); }
+      if (!this.controls.contains(event.target as Node) && !this.clickTarget(event as MouseEvent)) { this.selected = undefined; this.selectionAfterEdit = undefined; this.selectionPreview = undefined; this.paintSelection(); }
     });
     this.listen(root, 'click', event => this.click(event as MouseEvent), true);
     this.listen(root.ownerDocument, 'selectionchange', () => this.paintSelection());
+    const observer = new root.ownerDocument.defaultView!.MutationObserver(() => this.schedule());
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    this.cleanup.push(() => observer.disconnect());
     this.listen(root, 'scroll', () => this.refresh());
     this.listen(root, 'load', () => this.schedule(), true);
     this.listen(this.plus, 'pointerdown', event => event.preventDefault());
@@ -70,13 +82,23 @@ export class ReadingControls {
     this.listen(this.handle, 'pointercancel', () => this.cancel());
     this.listen(this.handle, 'keydown', event => this.keyboard(event as KeyboardEvent));
     this.listen(this.win, 'keydown', event => {
+      const key = event as KeyboardEvent;
+      if (key.defaultPrevented || key.isComposing || !key.altKey || key.ctrlKey || key.metaKey || key.shiftKey
+        || (key.key !== 'ArrowUp' && key.key !== 'ArrowDown') || this.selected === undefined
+        || this.host.optionArrowSelection?.() === false || !this.host.active()
+        || !this.root.contains(this.root.ownerDocument.activeElement)) return;
+      this.keyboard(key);
+    }, true);
+    this.listen(this.win, 'keydown', event => {
       if ((event as KeyboardEvent).key !== 'Escape' || event.defaultPrevented || !this.host.active()
         || !this.root.contains(this.root.ownerDocument.activeElement) || (!this.drag && this.selected === undefined)) return;
       event.preventDefault(); event.stopPropagation();
-      this.cancel(); this.selected = undefined; this.paintSelection(); this.hide();
+      this.cancel(); this.selected = undefined; this.selectionAfterEdit = undefined; this.selectionPreview = undefined; this.paintSelection(); this.hide();
     }, true);
     this.listen(this.win, 'blur', () => this.cancel());
     this.listen(this.win, 'resize', () => this.schedule());
+    this.keyboardScope = host.keyboardScope?.(root, event => { this.keyboard(event); return event.defaultPrevented; },
+      () => !this.destroyed && !this.pending && this.selected !== undefined && this.host.active() && this.host.optionArrowSelection?.() !== false);
     this.schedule();
   }
 
@@ -85,7 +107,8 @@ export class ReadingControls {
     this.cleanup.push(() => target.removeEventListener(type, callback, capture));
   }
 
-  addSection(element: HTMLElement, info: () => SectionInfo | null): void {
+  addSection(element: HTMLElement, info: () => SectionInfo | null, sectionInfo?: (element: HTMLElement) => SectionInfo | null): void {
+    if (sectionInfo) this.sectionInfo = sectionInfo;
     this.sections.set(element, info);
     this.schedule();
   }
@@ -97,15 +120,32 @@ export class ReadingControls {
   refresh(): void {
     if (this.destroyed) return;
     if (!this.host.active()) { this.cancel(); this.hide(); this.highlight.classList.remove('is-visible'); this.root.classList.remove('blocks-text-selected'); return; }
+    // A reload can leave already-rendered sections without new postprocessor callbacks.
+    // The host context can still resolve their current source ranges.
+    const sectionRoot = this.root.querySelector<HTMLElement>('.markdown-preview-section');
+    if (this.sectionInfo && sectionRoot) for (const child of sectionRoot.children) {
+      const element = child as HTMLElement;
+      if (element.matches('.mod-ui, .markdown-preview-pusher, .blocks-reading-empty')) continue;
+      this.sections.set(element, () => this.sectionInfo!(element));
+    }
     const source = this.host.read();
     if (!this.initialized || source !== this.source) {
       const oldBody = bodyStart(this.source);
       const newBody = bodyStart(source);
       const sameBody = this.initialized && this.source.slice(oldBody) === source.slice(newBody);
-      const selected = sameBody && this.selected !== undefined ? this.selected + newBody - oldBody : undefined;
+      const intent = this.selectionAfterEdit;
+      const ownMove = intent && source.slice(newBody) === intent.source.slice(bodyStart(intent.source));
+      const selected = ownMove ? intent.from + newBody - bodyStart(intent.source)
+        : sameBody && this.selected !== undefined ? this.selected + newBody - oldBody : undefined;
+      if (ownMove) this.selectionAfterEdit = undefined;
       this.initialized = true;
-      this.cancel(); this.selected = selected; this.hovered = undefined; this.hide();
+      this.cancel();
+      if (this.selectionPreview && selected !== undefined) this.selectionPreview.from = selected;
+      else this.selectionPreview = undefined;
+      this.selected = selected; this.hovered = undefined;
+      if (selected === undefined) this.hide();
       this.source = source; this.blocks = parseBlocks(source);
+      if (this.selected !== undefined) this.hovered = this.blocks.findIndex(block => block.from === this.selected);
       for (const blank of this.blanks.values()) blank.remove();
       this.blanks.clear();
     }
@@ -132,7 +172,6 @@ export class ReadingControls {
         mapped.set(index, previous);
       });
     }
-    const sectionRoot = this.root.querySelector<HTMLElement>('.markdown-preview-section');
     if (sectionRoot) this.blocks.forEach((block, index) => {
       if (block.kind !== 'Empty') return;
       let blank = this.blanks.get(block.from);
@@ -157,7 +196,12 @@ export class ReadingControls {
     if (this.drag?.active) this.paintDrag();
     else if (this.selected !== undefined) {
       const selected = this.geometry.find(g => g.block.from === this.selected);
-      if (selected) this.show(selected); else this.hide();
+      if (selected) this.show(selected);
+      else {
+        const bounds = this.selectionBounds();
+        if (bounds) { this.position(this.controls, bounds.left - 54, bounds.top); this.controls.classList.add('is-visible'); }
+        else this.hide();
+      }
     }
   }
 
@@ -220,18 +264,33 @@ export class ReadingControls {
   }
 
   private hide(): void { this.controls.classList.remove('is-visible'); }
+  private selectionBounds(): { top: number; bottom: number; left: number; right: number } | undefined {
+    const current = this.geometry.find(g => g.block.from === this.selected);
+    if (current) {
+      this.selectionPreview = { from: current.block.from, elements: current.elements, text: current.elements.map(el => el.textContent) };
+      return current;
+    }
+    const preview = this.selectionPreview;
+    if (!preview || preview.from !== this.selected || !preview.elements.every((el, i) => this.root.contains(el) && el.textContent === preview.text[i])) return;
+    const bounds = preview.elements.map(el => el.getBoundingClientRect()).filter(rect => rect.height > 0);
+    if (!bounds.length) return;
+    return { top: Math.min(...bounds.map(rect => rect.top)), bottom: Math.max(...bounds.map(rect => rect.bottom)),
+      left: Math.min(...bounds.map(rect => rect.left)), right: Math.max(...bounds.map(rect => rect.right)) };
+  }
+
   private paintSelection(): void {
+    this.keyboardScope?.sync();
     this.highlight.style.setProperty('--blocks-highlight-color', this.host.highlightColor?.() ?? 'var(--interactive-accent)');
-    const hovered = this.blocks[this.hovered ?? -1];
-    const pressed = this.selected !== undefined && hovered?.from === this.selected;
+    const pressed = this.selected !== undefined && this.blocks.some(block => block.from === this.selected);
     this.handle.classList.toggle('is-selected', pressed);
     this.handle.setAttribute('aria-pressed', String(pressed));
     const selection = this.root.ownerDocument.getSelection();
     const range = selection && !selection.isCollapsed && selection.rangeCount === 1
       && this.root.contains(selection.anchorNode) && this.root.contains(selection.focusNode)
       ? selection.getRangeAt(0) : undefined;
+    const selected = this.selectionBounds();
     const matching = this.selected !== undefined
-      ? this.geometry.filter(g => g.block.from === this.selected)
+      ? selected ? [selected] : []
       : this.geometry.filter(g => range && g.elements.some(element => range.intersectsNode(element)));
     this.root.classList.toggle('blocks-text-selected', matching.length > 0 && !!range && this.host.active());
     const g = matching.length ? {
@@ -307,6 +366,7 @@ export class ReadingControls {
       this.selected = this.blocks[drag.source]?.from;
       const selected = this.geometry.find(g => g.index === drag.source);
       if (selected) this.show(selected);
+      this.handle.focus({ preventScroll: true });
     }
   }
   private cancel(): void {
@@ -319,28 +379,56 @@ export class ReadingControls {
     this.paintSelection();
   }
   private keyboard(event: KeyboardEvent): void {
-    const block = this.blocks[this.hovered ?? -1];
-    if (!block || this.pending || !this.host.active()) return;
+    if (!this.host.active()) return;
+    this.refresh();
+    const index = this.selected !== undefined ? this.blocks.findIndex(block => block.from === this.selected) : this.hovered ?? -1;
+    const block = this.blocks[index];
+    if (!block) return;
+    if (this.pending) {
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); }
+      return;
+    }
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.selected = block.from; this.paintSelection(); return; }
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    event.preventDefault();
-    const index = this.hovered!;
+    if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.altKey) {
+      if (this.host.optionArrowSelection?.() === false || this.selected === undefined) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      const next = this.blocks[index + (event.key === 'ArrowUp' ? -1 : 1)];
+      if (!next) return;
+      this.selected = next.from;
+      const target = this.geometry.find(g => g.block === next);
+      if (target) {
+        this.show(target);
+        target.elements[0]?.scrollIntoView?.({ block: 'nearest' });
+      }
+      this.handle.focus({ preventScroll: true });
+      this.paintSelection(); this.schedule();
+      return;
+    }
+    event.preventDefault(); event.stopPropagation();
     const edit = moveBlock(this.source, this.blocks, index, event.key === 'ArrowUp' ? index - 1 : index + 2);
     if (edit) void this.commit(edit, false);
   }
   private async commit(edit: Edit, livePreview: boolean, snapshot = this.source): Promise<void> {
     if (this.pending || this.destroyed || !this.host.active() || this.host.read() !== snapshot) { this.refresh(); return; }
     this.pending = true;
+    const intent = !livePreview ? { source: snapshot.slice(0, edit.from) + edit.insert + snapshot.slice(edit.to), from: edit.cursor } : undefined;
+    this.selectionAfterEdit = intent;
     try {
-      if (await this.host.apply(edit, snapshot, livePreview) && !this.destroyed) {
-        this.refresh();
-        if (!livePreview) { this.selected = edit.cursor; this.schedule(); }
-      }
-    } catch (error) { this.host.report(error); }
-    finally { this.pending = false; }
+      const applied = await this.host.apply(edit, snapshot, livePreview);
+      if (!applied && this.selectionAfterEdit === intent) this.selectionAfterEdit = undefined;
+    } catch (error) {
+      if (this.selectionAfterEdit === intent) this.selectionAfterEdit = undefined;
+      this.host.report(error);
+    } finally {
+      this.pending = false;
+      if (!this.destroyed) { this.refresh(); this.schedule(); }
+    }
   }
   destroy(): void {
     this.destroyed = true;
+    this.keyboardScope?.destroy();
     this.cancel();
     if (this.frame) this.win.cancelAnimationFrame(this.frame);
     this.cleanup.forEach(fn => fn());

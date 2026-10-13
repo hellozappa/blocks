@@ -11,6 +11,7 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
   let text = initial;
   let active = true;
   let clickToEdit = true;
+  let optionArrowSelection = true;
   let cursorPlacement: 'click' | 'start' | 'end' = 'click';
   const root = document.createElement('div'); root.className = 'markdown-preview-view';
   root.innerHTML = '<div class="markdown-preview-section"></div>';
@@ -34,7 +35,7 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
   });
   const report = vi.fn();
   const open = vi.fn(async (_offset: number, _snapshot: string) => { active = false; return true; });
-  const controller = new ReadingControls(root, { clickToEdit: () => clickToEdit, cursorPlacement: () => cursorPlacement, open, read: () => text, active: () => active, apply, report });
+  const controller = new ReadingControls(root, { optionArrowSelection: () => optionArrowSelection, clickToEdit: () => clickToEdit, cursorPlacement: () => cursorPlacement, open, read: () => text, active: () => active, apply, report });
   controllers.push(controller);
   elements.forEach((el, i) => controller.addSection(el, () => ({ text: initial, lineStart: lines[i], lineEnd: lines[i] })));
   controller.refresh();
@@ -46,11 +47,38 @@ function fixture(initial = 'First\n\nSecond', markup = ['<p>First</p>', '<p>Seco
     const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
     Object.defineProperty(event, 'pointerId', { value: 1 }); handle.dispatchEvent(event);
   };
-  return { setCursorPlacement: (value: typeof cursorPlacement) => { cursorPlacement = value; }, open, setClickToEdit: (value: boolean) => { clickToEdit = value; }, root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
+  return { setOptionArrowSelection: (value: boolean) => { optionArrowSelection = value; }, setCursorPlacement: (value: typeof cursorPlacement) => { cursorPlacement = value; }, open, setClickToEdit: (value: boolean) => { clickToEdit = value; }, root, elements, controller, handle, plus, controls, hover, pointer, apply, report, text: () => text, setText: (next: string) => { text = next; }, setActive: (next: boolean) => { active = next; } };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 
 describe('Reading view controls', () => {
+  it.each(['frontmatter', 'none'])('recovers cached paragraphs after reload when postprocessor callbacks cover %s', async callbacks => {
+    const source = '---\ntitle: Example\n---\n\nFirst\n\nSecond';
+    const root = document.createElement('div');
+    root.innerHTML = '<div class="markdown-preview-section"><div class="mod-header mod-ui">Header</div><div class="mod-frontmatter mod-ui"><pre>frontmatter</pre></div><div class="el-p"><p>First</p></div><div class="el-p"><p>Second</p></div></div>';
+    document.body.append(root); root.getBoundingClientRect = () => rect(0, 400);
+    const sections = [...root.firstElementChild!.children] as HTMLElement[];
+    sections.forEach((el, i) => {
+      el.getBoundingClientRect = () => rect(i * 40, i === 1 ? 0 : 30);
+      (el.firstElementChild as HTMLElement | null)?.setAttribute('data-test', 'cached');
+      if (el.firstElementChild) (el.firstElementChild as HTMLElement).getBoundingClientRect = () => el.getBoundingClientRect();
+    });
+    const info = (element: HTMLElement) => ({ text: source, lineStart: element === sections[2] ? 4 : element === sections[3] ? 6 : 0, lineEnd: element === sections[2] ? 4 : element === sections[3] ? 6 : 2 });
+    const open = vi.fn(async () => true); const apply = vi.fn(async () => true);
+    const controller = new ReadingControls(root, { sectionInfo: callbacks === 'none' ? info : undefined, read: () => source, active: () => true, clickToEdit: () => true, open, apply, report: vi.fn() });
+    controllers.push(controller);
+    if (callbacks === 'frontmatter') controller.addSection(sections[1], () => info(sections[1]), info);
+    controller.refresh();
+    root.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 210, clientY: 85 }));
+    expect(root.querySelector('.blocks-controls')!.classList.contains('is-visible')).toBe(true);
+    const first = sections[2].querySelector('p')!;
+    first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(root.querySelector('.blocks-handle')!.getAttribute('aria-pressed')).toBe('true');
+    expect(root.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+    first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); await settle();
+    expect(open).toHaveBeenCalledExactlyOnceWith(source.indexOf('First'), source, undefined);
+    expect(apply).not.toHaveBeenCalled();
+  });
   it('selects on first content click and opens Live Preview on the second click of the same block', async () => {
     const f = fixture();
     const click = (index: number) => {
@@ -197,6 +225,93 @@ describe('Reading view controls', () => {
     f.setText('Externally changed'); f.pointer('pointerup', 160); await settle();
     expect(f.text()).toBe('Externally changed'); expect(f.apply).not.toHaveBeenCalled();
     expect(document.querySelector('.blocks-drag-ghost')).toBeNull();
+  });
+  it('Option+arrows select neighboring Reading blocks without writes, and plain arrows move the newly selected block', async () => {
+    const f = fixture('First\n\nSecond\n\nThird', ['<p>First</p>', '<p>Second</p>', '<p>Third</p>'], [0, 2, 4]);
+    f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+    expect(document.activeElement).toBe(f.handle);
+    const arrow = (key: string, altKey = true) => f.handle.dispatchEvent(new KeyboardEvent('keydown', { key, altKey, bubbles: true, cancelable: true }));
+    expect(arrow('ArrowUp')).toBe(false); expect(f.controls.style.top).toBe('20px');
+    arrow('ArrowDown'); expect(f.controls.style.top).toBe('100px');
+    arrow('ArrowDown'); expect(f.controls.style.top).toBe('180px');
+    arrow('ArrowDown'); expect(f.controls.style.top).toBe('180px');
+    arrow('ArrowUp'); expect(f.controls.style.top).toBe('100px');
+    expect(f.handle.getAttribute('aria-pressed')).toBe('true'); expect(f.apply).not.toHaveBeenCalled(); expect(f.open).not.toHaveBeenCalled();
+    arrow('ArrowUp', false); await settle();
+    expect(f.text()).toBe('Second\n\nFirst\n\nThird'); expect(f.apply).toHaveBeenCalledOnce();
+  });
+  it('keeps selection and repeated arrow movement while the renderer still reports the previous source', async () => {
+    const f = fixture('First\n\nSecond\n\nThird', ['<p>First</p>', '<p>Second</p>', '<p>Third</p>'], [0, 2, 4]);
+    f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+    for (const [key, expected] of [
+      ['ArrowDown', 'Second\n\nFirst\n\nThird'],
+      ['ArrowDown', 'Second\n\nThird\n\nFirst'],
+      ['ArrowUp', 'Second\n\nFirst\n\nThird'],
+      ['ArrowUp', 'First\n\nSecond\n\nThird'],
+    ]) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      expect(f.handle.dispatchEvent(event)).toBe(false); await settle();
+      expect(f.text()).toBe(expected);
+      expect(f.handle.getAttribute('aria-pressed')).toBe('true');
+      expect(f.controls.classList.contains('is-visible')).toBe(true);
+      expect(f.root.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
+      expect(document.activeElement).toBe(f.handle);
+    }
+    expect(f.apply).toHaveBeenCalledTimes(4);
+  });
+  it('remaps the retained highlight when incremental rendering moves the existing paragraph element', async () => {
+    const f = fixture(); f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+    f.handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); await settle();
+    const section = f.elements[0].parentElement!;
+    section.insertBefore(f.elements[1], f.elements[0]);
+    f.elements.forEach((element, oldIndex) => {
+      const index = oldIndex === 0 ? 1 : 0;
+      element.getBoundingClientRect = () => rect(20 + index * 80);
+      (element.firstElementChild as HTMLElement).getBoundingClientRect = () => element.getBoundingClientRect();
+      f.controller.addSection(element, () => ({ text: f.text(), lineStart: index * 2, lineEnd: index * 2 }));
+    });
+    await settle();
+    expect(f.controls.style.top).toBe('100px');
+    expect(f.root.querySelector<HTMLElement>('.blocks-selection-highlight')!.style.top).toBe('100px');
+    expect(f.handle.getAttribute('aria-pressed')).toBe('true');
+    f.handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })); await settle();
+    expect(f.text()).toBe('First\n\nSecond'); expect(f.handle.getAttribute('aria-pressed')).toBe('true');
+  });
+  it('does not reselect a moved block if the user explicitly deselects during the pending move', async () => {
+    const f = fixture(); f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+    let finish!: (value: boolean) => void;
+    f.apply.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    f.handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    f.handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    f.setText('Second\n\nFirst'); finish(true); await settle();
+    expect(f.handle.getAttribute('aria-pressed')).toBe('false');
+    expect(f.root.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(false);
+  });
+  it('handles Option+Up before a document shortcut while preserving that shortcut outside a block selection', () => {
+    const shortcut = vi.fn((event: KeyboardEvent) => {
+      if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); }
+    });
+    document.addEventListener('keydown', shortcut, true);
+    try {
+      const f = fixture(); f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+      const arrow = (key: string) => f.handle.dispatchEvent(new KeyboardEvent('keydown', { key, altKey: true, bubbles: true, cancelable: true }));
+      arrow('ArrowDown'); expect(f.controls.style.top).toBe('100px');
+      shortcut.mockClear(); arrow('ArrowUp');
+      expect(f.controls.style.top).toBe('20px'); expect(shortcut).not.toHaveBeenCalled();
+      expect(f.apply).not.toHaveBeenCalled();
+      f.setOptionArrowSelection(false); arrow('ArrowUp'); expect(shortcut).toHaveBeenCalledOnce();
+      shortcut.mockClear(); const input = document.createElement('input'); document.body.append(input); input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }));
+      expect(shortcut).toHaveBeenCalledOnce();
+    } finally { document.removeEventListener('keydown', shortcut, true); }
+  });
+  it('disables only Option selection navigation and reads changes to the setting live', () => {
+    const f = fixture(); f.hover(); f.pointer('pointerdown', 25); f.pointer('pointerup', 25);
+    f.setOptionArrowSelection(false);
+    const down = () => f.handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }));
+    expect(down()).toBe(true); expect(f.controls.style.top).toBe('20px');
+    f.setOptionArrowSelection(true); expect(down()).toBe(false); expect(f.controls.style.top).toBe('100px');
+    expect(f.apply).not.toHaveBeenCalled();
   });
   it('cancels on Escape and supports keyboard movement', async () => {
     const f = fixture(); f.hover(); f.pointer('pointerdown', 25); f.pointer('pointermove', 160);

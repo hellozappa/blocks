@@ -2,6 +2,7 @@ import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { Block, Edit, blockAt, insertBlock, moveBlock, parseBlocks } from './blocks';
 import { createControls } from './controls';
+import type { KeyboardScopeControl, KeyboardScopeFactory } from './keyboard-scope';
 
 interface Geometry { block: Block; index: number; top: number; bottom: number; left: number; right: number }
 interface PreviewLine { element: HTMLElement; index: number; originalTranslate: string; shift?: number }
@@ -30,8 +31,9 @@ class BlockControls {
   private readonly win: Window;
   private readonly cleanup: (() => void)[] = [];
   private destroyed = false;
+  private keyboardScope?: KeyboardScopeControl;
 
-  constructor(private readonly view: EditorView, private readonly highlightColor: () => string = () => 'var(--interactive-accent)') {
+  constructor(private readonly view: EditorView, private readonly highlightColor: () => string = () => 'var(--interactive-accent)', private readonly optionArrowSelection: () => boolean = () => true, keyboardScope?: KeyboardScopeFactory) {
     this.win = view.dom.ownerDocument.defaultView!;
     this.blocks = parseBlocks(view.state.doc.toString());
     const buttons = createControls(view.dom.ownerDocument);
@@ -60,8 +62,17 @@ class BlockControls {
     this.listen(this.handle, 'pointercancel', () => this.cancel());
     this.listen(this.handle, 'lostpointercapture', () => this.cancel());
     this.listen(this.handle, 'keydown', event => this.keyboard(event as KeyboardEvent));
+    this.listen(this.win, 'keydown', event => {
+      const key = event as KeyboardEvent;
+      if (key.defaultPrevented || key.isComposing || !key.altKey || key.ctrlKey || key.metaKey || key.shiftKey
+        || (key.key !== 'ArrowUp' && key.key !== 'ArrowDown') || !this.selected || !this.optionArrowSelection()
+        || !this.view.dom.contains(this.view.dom.ownerDocument.activeElement)) return;
+      this.keyboard(key);
+    }, true);
     this.listen(this.win, 'keydown', event => this.escape(event as KeyboardEvent), true);
     this.listen(this.win, 'blur', () => this.cancel());
+    this.keyboardScope = keyboardScope?.(view.dom, event => { this.keyboard(event); return event.defaultPrevented; },
+      () => !this.destroyed && !!this.selected && this.optionArrowSelection() && !this.view.state.readOnly);
     this.measure();
   }
 
@@ -179,9 +190,9 @@ class BlockControls {
 
   private hide(): void { this.controls.classList.remove('is-visible'); }
 
-  private select(block: Block): void {
+  private select(block: Block, scrollIntoView = false): void {
     const origin = this.view.state.selection.main.head;
-    this.view.dispatch({ selection: EditorSelection.single(block.from, block.to) });
+    this.view.dispatch({ selection: EditorSelection.single(block.from, block.to), scrollIntoView });
     this.selected = block;
     this.hovered = block;
     this.selectionOrigin = origin >= block.from && origin <= block.to ? origin : block.from;
@@ -221,6 +232,7 @@ class BlockControls {
   private updateSelection(includeText = true): void {
     const ranges = includeText ? this.view.state.selection.ranges.filter(range => !range.empty) : [];
     this.view.dom.toggleAttribute('data-blocks-block-selected', !!this.selected);
+    this.keyboardScope?.sync();
     this.highlight.style.setProperty('--blocks-highlight-color', this.highlightColor());
     const pressed = !!this.selected && this.hovered === this.selected;
     this.handle.classList.toggle('is-selected', pressed);
@@ -435,8 +447,17 @@ class BlockControls {
       return;
     }
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    event.preventDefault();
-    const source = this.blocks.indexOf(this.hovered);
+    if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.altKey) {
+      if (!this.optionArrowSelection() || !this.selected) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      const index = this.blocks.indexOf(this.selected);
+      const next = this.blocks[index + (event.key === 'ArrowUp' ? -1 : 1)];
+      if (next) this.select(next, true);
+      return;
+    }
+    event.preventDefault(); event.stopPropagation();
+    const source = this.blocks.indexOf(this.selected ?? this.hovered);
     const edit = moveBlock(this.view.state.doc.toString(), this.blocks, source, event.key === 'ArrowUp' ? source - 1 : source + 2);
     if (edit) {
       this.apply(edit, 'move.blocks', this.blocks[source]);
@@ -464,6 +485,7 @@ class BlockControls {
 
   destroy(): void {
     this.destroyed = true;
+    this.keyboardScope?.destroy();
     this.cancel();
     this.cleanup.forEach(fn => fn());
     this.controls.remove();
@@ -475,10 +497,10 @@ class BlockControls {
   }
 }
 
-export function createBlocksExtension(highlightColor: () => string) {
+export function createBlocksExtension(highlightColor: () => string, optionArrowSelection: () => boolean = () => true, keyboardScope?: KeyboardScopeFactory) {
   return [
     EditorView.editorAttributes.of({ class: 'blocks-editor' }),
-    ViewPlugin.define(view => new BlockControls(view, highlightColor)),
+    ViewPlugin.define(view => new BlockControls(view, highlightColor, optionArrowSelection, keyboardScope)),
   ];
 }
 export const blocksExtension = createBlocksExtension(() => 'var(--interactive-accent)');

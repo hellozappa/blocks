@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MarkdownView, EditorTransaction } from 'obsidian';
-import { EditorState } from '@codemirror/state';
+import { EditorState, type TransactionSpec } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
+import { EditorView } from '@codemirror/view';
 import { applyReadingEdit, openReadingBlock } from '../src/reading-edit';
 import { insertBlock, moveBlock, parseBlocks } from '../src/blocks';
+
+afterEach(() => vi.restoreAllMocks());
 
 function fixture(initial = 'First\n\nSecond') {
   let state = EditorState.create({ doc: initial, extensions: [history()] });
@@ -21,7 +24,12 @@ function fixture(initial = 'First\n\nSecond') {
     previewMode: { rerender: vi.fn() },
     leaf: { getViewState: () => ({ type: 'markdown', state: { file: 'Test.md', mode: 'preview', source: true, backlinks: false } }), setViewState: vi.fn(async () => {}) },
   };
-  return { view, typed: view as unknown as MarkdownView, text: () => state.doc.toString(), setCanonical: (text: string) => { canonical = text; }, undo: () => undo({ state, dispatch: tx => { state = tx.state; } }) };
+  const cm = { get state() { return state; }, dispatch: vi.fn((spec: TransactionSpec) => { state = state.update(spec).state; }) };
+  const useCodeMirror = () => {
+    Object.assign(view, { containerEl: { querySelector: vi.fn(() => ({})) } });
+    vi.spyOn(EditorView, 'findFromDOM').mockReturnValue(cm as unknown as EditorView);
+  };
+  return { cm, useCodeMirror, view, typed: view as unknown as MarkdownView, text: () => state.doc.toString(), setCanonical: (text: string) => { canonical = text; }, undo: () => undo({ state, dispatch: tx => { state = tx.state; } }) };
 }
 describe('Reading view editor bridge', () => {
   it('opens the selected block in Live Preview without writing note content or adding an undo step', async () => {
@@ -59,6 +67,31 @@ describe('Reading view editor bridge', () => {
     expect(f.text()).toBe('Second\n\nFirst'); expect(f.view.editor.transaction).toHaveBeenCalledTimes(1);
     expect(f.view.leaf.setViewState).not.toHaveBeenCalled();
     expect(f.undo()).toBe(true); expect(f.text()).toBe(source);
+  });
+  it.each([false, true])('moves through the hidden CodeMirror editor without scrolling or a full preview rebuild, stale=%s', stale => {
+    const f = fixture(); f.useCodeMirror();
+    const source = stale ? '---\nmodified: current\n---\n\nFirst\n\nSecond' : f.text();
+    f.setCanonical(source);
+    const edit = moveBlock(source, parseBlocks(source), 0, 2)!;
+    return applyReadingEdit(f.typed, 'Test.md', edit, source, false).then(applied => {
+      expect(applied).toBe(true);
+      expect(f.cm.dispatch).toHaveBeenCalledOnce();
+      expect(f.cm.dispatch.mock.calls[0][0].scrollIntoView).toBe(false);
+      expect(f.view.editor.transaction).not.toHaveBeenCalled();
+      expect(f.view.previewMode.rerender).not.toHaveBeenCalled();
+      expect(f.view.leaf.setViewState).not.toHaveBeenCalled();
+      expect(f.text()).toBe(source.slice(0, edit.from) + edit.insert + source.slice(edit.to));
+      expect(f.view.getViewData()).toBe(f.text()); expect(f.view.requestSave).toHaveBeenCalledOnce();
+      expect(f.undo()).toBe(true); expect(f.text()).toBe('First\n\nSecond');
+    });
+  });
+  it('leaves unchanged preview sections available while the move is queued for incremental rendering', async () => {
+    const f = fixture(); const source = f.text(); const edit = moveBlock(source, parseBlocks(source), 0, 2)!;
+    const sections = ['First', 'Second', 'Unchanged bottom paragraph'];
+    f.view.previewMode.rerender.mockImplementation(() => { sections.length = 0; });
+    await applyReadingEdit(f.typed, 'Test.md', edit, source, false);
+    expect(sections).toHaveLength(3);
+    expect(f.view.previewMode.rerender).not.toHaveBeenCalled();
   });
   it('inserts, explicitly selects Live Preview, and places the caret in the new blank block', async () => {
     const f = fixture(); const source = f.text(); const edit = insertBlock(source, parseBlocks(source)[0], false);

@@ -24,8 +24,8 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-function editor(doc = 'First\n\nSecond', readOnly = false): EditorView {
-  const view = new EditorView({ parent: document.body, state: EditorState.create({ doc, extensions: [blocksExtension, EditorState.readOnly.of(readOnly)] }) });
+function editor(doc = 'First\n\nSecond', readOnly = false, optionArrowSelection?: () => boolean): EditorView {
+  const view = new EditorView({ parent: document.body, state: EditorState.create({ doc, extensions: [optionArrowSelection ? createBlocksExtension(() => 'var(--interactive-accent)', optionArrowSelection) : blocksExtension, EditorState.readOnly.of(readOnly)] }) });
   views.push(view);
   return view;
 }
@@ -151,6 +151,47 @@ describe('editor integration', () => {
     expect(view.dom.querySelector('.blocks-selection-highlight')!.classList.contains('is-visible')).toBe(true);
     expect(view.state.doc.toString()).toBe('First sentence.');
     expect(view.state.selection.main.empty).toBe(false);
+  });
+
+  it('Option+arrows navigate the selected block without changing text, and plain arrows then move that block', async () => {
+    const doc = 'First\n\nSecond\n\nThird'; const view = editor(doc); await hover(view); view.focus();
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    const handle = view.dom.querySelector<HTMLElement>('.blocks-handle')!;
+    const arrow = (key: string, altKey = true) => handle.dispatchEvent(new KeyboardEvent('keydown', { key, altKey, bubbles: true, cancelable: true }));
+    expect(arrow('ArrowUp')).toBe(false); expect(view.state.selection.main.from).toBe(0);
+    arrow('ArrowDown'); expect(view.state.selection.main.from).toBe(7); expect(view.state.selection.main.to).toBe(13);
+    arrow('ArrowDown'); expect(view.state.selection.main.from).toBe(15);
+    arrow('ArrowDown'); expect(view.state.selection.main.from).toBe(15);
+    arrow('ArrowUp'); expect(view.state.selection.main.from).toBe(7);
+    expect(view.state.doc.toString()).toBe(doc); expect(document.activeElement).toBe(handle);
+    expect(view.dom.hasAttribute('data-blocks-block-selected')).toBe(true);
+    arrow('ArrowUp', false); expect(view.state.doc.toString()).toBe('Second\n\nFirst\n\nThird');
+    expect(view.state.selection.main.from).toBe(0); expect(view.state.selection.main.to).toBe(6);
+  });
+  it('handles Option+Up before a document shortcut in the focused selected editor', async () => {
+    const shortcut = vi.fn((event: KeyboardEvent) => {
+      if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); event.stopImmediatePropagation(); }
+    });
+    document.addEventListener('keydown', shortcut, true);
+    try {
+      const view = editor(); await hover(view); view.focus();
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      const handle = view.dom.querySelector('.blocks-handle')!;
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }));
+      expect(view.state.selection.main.from).toBe(7); shortcut.mockClear();
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }));
+      expect(view.state.selection.main.from).toBe(0); expect(shortcut).not.toHaveBeenCalled();
+      expect(view.state.doc.toString()).toBe('First\n\nSecond');
+    } finally { document.removeEventListener('keydown', shortcut, true); }
+  });
+  it('honors changes to the Option navigation setting without moving content when disabled', async () => {
+    let enabled = false; const view = editor('First\n\nSecond', false, () => enabled); await hover(view); view.focus();
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    const handle = view.dom.querySelector('.blocks-handle')!;
+    const down = () => handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true, cancelable: true }));
+    expect(down()).toBe(true); expect(view.state.selection.main.from).toBe(0);
+    expect(view.state.doc.toString()).toBe('First\n\nSecond');
+    enabled = true; expect(down()).toBe(false); expect(view.state.selection.main.from).toBe(7);
   });
 
   it('preserves accessible control names without attributes that trigger host or native tooltips', () => {

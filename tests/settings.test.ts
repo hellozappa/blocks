@@ -12,6 +12,8 @@ describe('highlight settings', () => {
   });
   it('loads saved colors, defaults safely, and follows accent changes through the CSS variable', () => {
     expect(loadSettings(null)).toEqual(defaultSettings);
+    expect(loadSettings({}).optionArrowSelection).toBe(true);
+    expect(loadSettings({ optionArrowSelection: false }).optionArrowSelection).toBe(false);
     expect(loadSettings({}).readingClickToEdit).toBe(true);
     expect(loadSettings({}).readingCursorPlacement).toBe('click');
     expect(loadSettings({ readingCursorPlacement: 'start' }).readingCursorPlacement).toBe('start');
